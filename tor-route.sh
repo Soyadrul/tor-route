@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  tor-route.sh — Route all system traffic through Tor on Arch Linux
-#  v4 — fixes: WebRTC/UDP leak, systemd-resolved auto-restart
+#  v5 — fixes: socket-activation bypass of systemd-resolved,
+#              unconditional restore of systemd-resolved on stop
 #
 #  Usage (must be run as root):
 #    sudo bash tor-route.sh start    → Enable Tor routing
@@ -14,22 +15,35 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-TOR_TRANS_PORT=9040   # Tor transparent TCP proxy port
-TOR_DNS_PORT=5353     # Tor DNS port (unprivileged — Tor's user can bind to it)
+TOR_TRANS_PORT=9040
+TOR_DNS_PORT=5353
 TOR_UID=$(id -u tor 2>/dev/null)
-
-# These address ranges stay on the local network and never go through Tor
 NON_TOR="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
-
 TORRC="/etc/tor/torrc"
+
+# Backup / state files written during `start`, read back during `stop`
 IPTABLES_BACKUP="/tmp/iptables-pre-tor.rules"
 IP6TABLES_BACKUP="/tmp/ip6tables-pre-tor.rules"
 RESOLV_BACKUP="/tmp/resolv.conf.pre-tor"
 
+# This file records whether systemd-resolved was active BEFORE we touched it.
+# `stop` reads it so it only restores the service if it was running originally.
+RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
+
+# All systemd units that together make up systemd-resolved.
+# We must mask ALL of them — masking only the service leaves the socket units
+# alive, and socket activation will silently revive the service the moment
+# any DNS traffic appears (which is what caused the v4 leak).
+RESOLVED_UNITS=(
+    systemd-resolved.service
+    systemd-resolved-varlink.socket
+    systemd-resolved-monitor.socket
+)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════╗"
-    echo -e "║        Tor Traffic Router  v4        ║"
+    echo -e "║        Tor Traffic Router  v5        ║"
     echo -e "╚══════════════════════════════════════╝${RESET}\n"
 }
 
@@ -81,33 +95,83 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
-# ── DNS: mask systemd-resolved so it cannot restart itself ───────────────────
-#
-# v3 used `systemctl stop systemd-resolved`, but systemd-resolved has a
-# Restart= directive in its unit file — it restores itself automatically
-# within seconds. `systemctl mask` creates a symlink to /dev/null that
-# makes systemd pretend the service doesn't exist, preventing any restart
-# until we explicitly unmask it.
+# ── DNS: stop and mask systemd-resolved AND its socket units ─────────────────
 fix_dns_start() {
-    echo -e "${YELLOW}[i] Masking and stopping systemd-resolved (prevents auto-restart)...${RESET}"
+    # --- Record original state BEFORE we touch anything ---
+    #
+    # We check whether systemd-resolved.service is currently active and save
+    # "yes" or "no" to a temp file. `stop` will read this file and only
+    # restore the service if it was running before we started.
+    if systemctl is-active --quiet systemd-resolved.service; then
+        echo "yes" > "$RESOLVED_STATE_FILE"
+        echo -e "${YELLOW}[i] systemd-resolved was running — will restore it on stop.${RESET}"
+    else
+        echo "no" > "$RESOLVED_STATE_FILE"
+        echo -e "${YELLOW}[i] systemd-resolved was NOT running — will leave it stopped on stop.${RESET}"
+    fi
+
+    # Back up resolv.conf before touching it
     cp --dereference /etc/resolv.conf "$RESOLV_BACKUP" 2>/dev/null
-    systemctl mask systemd-resolved   # blocks auto-restart
-    systemctl stop systemd-resolved
+
+    # Mask and stop ALL related units.
+    #
+    # Why mask the socket units too?
+    # systemd uses "socket activation": instead of keeping a service running
+    # all the time, it keeps a lightweight socket open. The moment any process
+    # sends traffic to that socket, systemd automatically starts the full
+    # service. If we only mask systemd-resolved.service but leave the sockets
+    # alive, any DNS query will silently bring systemd-resolved back to life —
+    # which is exactly what was happening in v4.
+    echo -e "${YELLOW}[i] Masking all systemd-resolved units (service + sockets)...${RESET}"
+    for unit in "${RESOLVED_UNITS[@]}"; do
+        systemctl mask --now "$unit" 2>/dev/null && \
+            echo -e "    Masked: ${unit}" || \
+            echo -e "    ${YELLOW}(skipped — not found: ${unit})${RESET}"
+    done
+
+    # Write a plain resolv.conf pointing to 127.0.0.1.
+    # iptables will intercept port-53 queries there and forward them to
+    # Tor's DNS listener on port 5353.
     rm -f /etc/resolv.conf
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
-    echo -e "${GREEN}[✓] /etc/resolv.conf → 127.0.0.1 → iptables will forward to Tor:${TOR_DNS_PORT}${RESET}"
+    echo -e "${GREEN}[✓] /etc/resolv.conf → 127.0.0.1 (iptables will forward to Tor:${TOR_DNS_PORT}).${RESET}"
 }
 
 fix_dns_stop() {
-    echo -e "${YELLOW}[i] Unmasking and restoring systemd-resolved...${RESET}"
-    systemctl unmask systemd-resolved
-    [[ -f "$RESOLV_BACKUP" ]] && cp "$RESOLV_BACKUP" /etc/resolv.conf && rm -f "$RESOLV_BACKUP"
-    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
-    systemctl start systemd-resolved
-    echo -e "${GREEN}[✓] systemd-resolved restored.${RESET}"
+    # Unmask and re-enable all units we masked
+    echo -e "${YELLOW}[i] Unmasking systemd-resolved units...${RESET}"
+    for unit in "${RESOLVED_UNITS[@]}"; do
+        systemctl unmask "$unit" 2>/dev/null && \
+            echo -e "    Unmasked: ${unit}" || \
+            echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
+    done
+
+    # Restore resolv.conf
+    if [[ -f "$RESOLV_BACKUP" ]]; then
+        cp "$RESOLV_BACKUP" /etc/resolv.conf
+        rm -f "$RESOLV_BACKUP"
+        echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
+    else
+        # No backup — recreate the standard symlink used by Arch + systemd
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
+        echo -e "${YELLOW}[i] No resolv.conf backup found — recreated default symlink.${RESET}"
+    fi
+
+    # Only start systemd-resolved if it was active before we ran `start`.
+    # This avoids leaving the user's system in a different state than it was.
+    local was_running
+    was_running=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
+    rm -f "$RESOLVED_STATE_FILE"
+
+    if [[ "$was_running" == "yes" ]]; then
+        systemctl start systemd-resolved.service
+        echo -e "${GREEN}[✓] systemd-resolved restored (it was running before).${RESET}"
+    else
+        echo -e "${YELLOW}[i] systemd-resolved was not running before — leaving it stopped.${RESET}"
+    fi
 }
 
-# ── Verify Tor is listening on expected ports ─────────────────────────────────
+# ── Verify Tor port bindings ──────────────────────────────────────────────────
 verify_tor_ports() {
     echo -e "${CYAN}[i] Verifying Tor port bindings...${RESET}"
     local ok=1
@@ -117,8 +181,11 @@ verify_tor_ports() {
     ss -ulnp 2>/dev/null | grep -q ":${TOR_DNS_PORT}" \
         && echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${GREEN}Listening ✓${RESET}" \
         || { echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${RED}NOT listening ✗${RESET}"; ok=0; }
-    [[ $ok -eq 0 ]] && { echo -e "\n${RED}[✗] Tor is not listening on required ports.${RESET}"
-                          echo -e "    Check: ${BOLD}journalctl -u tor -n 50${RESET}"; return 1; }
+    [[ $ok -eq 0 ]] && {
+        echo -e "\n${RED}[✗] Tor is not listening on required ports.${RESET}"
+        echo -e "    Check: ${BOLD}journalctl -u tor -n 50${RESET}"
+        return 1
+    }
     return 0
 }
 
@@ -142,93 +209,54 @@ restore_iptables() {
 }
 
 apply_iptables() {
-    # Start with a clean slate in the chains we'll modify
     iptables -t nat -F OUTPUT
     iptables -F OUTPUT
 
-    # ── NAT table (OUTPUT chain): redirect traffic into Tor ──────────────────
-
-    # DNS/UDP (port 53) → Tor's DNS port, excluding Tor's own traffic
+    # DNS/UDP port 53 → Tor DNS (excludes Tor's own traffic)
     iptables -t nat -A OUTPUT \
         -m owner ! --uid-owner "$TOR_UID" \
         -p udp --dport 53 \
         -j REDIRECT --to-ports "$TOR_DNS_PORT"
 
-    # DNS/TCP (port 53) → same (large DNS responses fall back to TCP)
+    # DNS/TCP port 53 → Tor DNS (large responses fall back to TCP)
     iptables -t nat -A OUTPUT \
         -m owner ! --uid-owner "$TOR_UID" \
         -p tcp --dport 53 \
         -j REDIRECT --to-ports "$TOR_DNS_PORT"
 
-    # Tor's own traffic: let it out untouched (prevents routing loop)
+    # Tor's own traffic passes untouched (prevents redirect loop)
     iptables -t nat -A OUTPUT \
         -m owner --uid-owner "$TOR_UID" \
         -j RETURN
 
-    # LAN / loopback addresses: pass through directly
+    # LAN/loopback ranges bypass Tor
     for addr in $NON_TOR; do
         iptables -t nat -A OUTPUT -d "$addr" -j RETURN
     done
 
-    # All new TCP connections → Tor's transparent proxy
+    # All new TCP connections → Tor transparent proxy
     iptables -t nat -A OUTPUT \
         -p tcp \
         -m state --state NEW \
         -j REDIRECT --to-ports "$TOR_TRANS_PORT"
 
-    # ── FILTER table (OUTPUT chain): block UDP leaks ──────────────────────────
-    #
-    # *** FIX v4: Block all non-DNS UDP — this kills WebRTC leaks.
-    #
-    # WebRTC is a browser feature (used for video calls) that sends UDP packets
-    # to STUN servers. These servers reply with your true public IP address.
-    # NordVPN's website (and similar IP-check tools) use WebRTC specifically
-    # because it bypasses proxies and iptables NAT rules that only affect TCP.
-    #
-    # Tor cannot carry UDP traffic (except DNS which we handle separately),
-    # so the only safe thing to do with non-DNS UDP is to DROP it entirely.
-    # This prevents WebRTC, QUIC (HTTP/3), and any other UDP protocol from
-    # leaking your real IP while Tor is active.
-    #
-    # Rule order:
-    #   1. Allow Tor's own UDP (it needs to talk to the Tor network)
-    #   2. Allow DNS/UDP to localhost (our iptables NAT rule above will
-    #      redirect it to Tor's DNS port — so it's safe)
-    #   3. Allow UDP to local/private IPs (LAN traffic must still work)
-    #   4. DROP everything else (WebRTC, QUIC, STUN, etc.)
-
-    # Allow Tor's own UDP outbound
-    iptables -A OUTPUT \
-        -m owner --uid-owner "$TOR_UID" \
-        -p udp \
-        -j ACCEPT
-
-    # Allow DNS queries to localhost (they get redirected to Tor by NAT above)
-    iptables -A OUTPUT \
-        -p udp --dport 53 \
-        -d 127.0.0.1 \
-        -j ACCEPT
-
-    # Allow UDP to LAN/private ranges (printers, mDNS, local services)
+    # Block all non-DNS UDP (kills WebRTC/QUIC/STUN leaks)
+    iptables -A OUTPUT -m owner --uid-owner "$TOR_UID" -p udp -j ACCEPT
+    iptables -A OUTPUT -p udp --dport 53 -d 127.0.0.1 -j ACCEPT
     for addr in $NON_TOR; do
         iptables -A OUTPUT -p udp -d "$addr" -j ACCEPT
     done
-
-    # DROP all other UDP — this is what stops WebRTC and other UDP leaks
     iptables -A OUTPUT -p udp -j DROP
 
-    # ── IPv6: block entirely ──────────────────────────────────────────────────
-    # Tor does not support IPv6 transparent proxying. Without this, browsers
-    # connect to dual-stack sites over IPv6 and bypass Tor completely.
+    # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack sites)
     ip6tables -P INPUT   DROP
     ip6tables -P OUTPUT  DROP
     ip6tables -P FORWARD DROP
 
-    echo -e "${YELLOW}[i] IPv6 fully blocked.${RESET}"
-    echo -e "${YELLOW}[i] Non-DNS UDP blocked (WebRTC/QUIC/STUN leaks prevented).${RESET}"
+    echo -e "${YELLOW}[i] IPv6 blocked. Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
 }
 
-# ── Public IP check ───────────────────────────────────────────────────────────
+# ── Public IP display ─────────────────────────────────────────────────────────
 show_ip() {
     echo -e "${CYAN}[i] Fetching public IP...${RESET}"
     local ip
@@ -236,7 +264,6 @@ show_ip() {
     [[ -n "$ip" ]] \
         && echo -e "    IPv4: ${BOLD}${ip}${RESET}" \
         || echo -e "    ${YELLOW}IPv4: could not fetch (Tor may still be starting).${RESET}"
-
     local ip6
     ip6=$(curl -s --max-time 5 -6 https://api6.ipify.org 2>/dev/null)
     [[ -n "$ip6" ]] \
@@ -254,7 +281,6 @@ cmd_start() {
     check_dependencies
 
     echo -e "${CYAN}[→] Starting Tor routing...${RESET}\n"
-
     configure_torrc
     fix_dns_start
 
@@ -268,8 +294,7 @@ cmd_start() {
     echo ""
 
     if ! systemctl is-active --quiet tor; then
-        echo -e "${RED}[✗] Tor failed to start.${RESET}"
-        echo -e "    Run: ${BOLD}journalctl -u tor -n 50${RESET}"
+        echo -e "${RED}[✗] Tor failed to start. Run: journalctl -u tor -n 50${RESET}"
         fix_dns_stop; cleanup_torrc; exit 1
     fi
     echo -e "${GREEN}[✓] Tor is running.${RESET}\n"
@@ -282,8 +307,8 @@ cmd_start() {
     apply_iptables
 
     echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
-    echo -e "    ${YELLOW}Important:${RESET} To fully prevent WebRTC leaks in your browser,"
-    echo -e "    also disable WebRTC or install the 'WebRTC Leak Shield' extension.\n"
+    echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
+    echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
     show_ip
     echo -e "\n    ${BOLD}sudo bash $0 newnode${RESET}  — new exit node / new IP"
     echo -e "    ${BOLD}sudo bash $0 stop${RESET}     — restore normal internet\n"
@@ -311,7 +336,7 @@ cmd_status() {
     echo -e "${CYAN}[→] Status:${RESET}\n"
 
     systemctl is-active --quiet tor \
-        && echo -e "  Tor service:       ${GREEN}${BOLD}Running${RESET}" \
+        && echo -e "  Tor service:       ${GREEN}${BOLD}Running ✓${RESET}" \
         || echo -e "  Tor service:       ${RED}${BOLD}Stopped${RESET}"
 
     iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}" \
@@ -320,24 +345,27 @@ cmd_status() {
 
     iptables -L OUTPUT 2>/dev/null | grep -q "udp.*DROP\|DROP.*udp" \
         && echo -e "  UDP / WebRTC:      ${GREEN}${BOLD}Blocked ✓${RESET}" \
-        || echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked — WebRTC leak possible!${RESET}"
+        || echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked — leak possible!${RESET}"
 
     ip6tables -L OUTPUT 2>/dev/null | grep -q "DROP\|policy DROP" \
         && echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" \
         || echo -e "  IPv6:              ${YELLOW}Not blocked${RESET}"
 
-    systemctl is-active --quiet systemd-resolved \
-        && echo -e "  DNS:               ${RED}${BOLD}systemd-resolved running — DNS may leak!${RESET}" \
-        || echo -e "  DNS:               ${GREEN}${BOLD}Masked → routed through Tor ✓${RESET}"
+    # Check the service AND its socket units
+    local resolved_ok=true
+    for unit in "${RESOLVED_UNITS[@]}"; do
+        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+            resolved_ok=false
+            echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE — may leak!${RESET}"
+        fi
+    done
+    $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
 
     if systemctl is-active --quiet tor; then
-        echo ""
-        verify_tor_ports
+        echo ""; verify_tor_ports
     fi
 
-    echo ""
-    show_ip
-    echo ""
+    echo ""; show_ip; echo ""
 }
 
 cmd_newnode() {
@@ -349,15 +377,12 @@ cmd_newnode() {
     fi
 
     echo -e "${CYAN}[→] Requesting a new Tor circuit (new exit node = new IP)...${RESET}\n"
-    echo -e "  ${YELLOW}Current IP:${RESET}"; show_ip
+    echo -e "  ${YELLOW}Current:${RESET}"; show_ip
 
-    # SIGHUP makes Tor reload its config and rebuild all circuits.
-    # Circuit = 3-hop path: Guard → Middle → Exit node.
-    # The Exit is what websites see as your IP. New circuit = new Exit = new IP.
     systemctl kill --signal=SIGHUP tor
     echo -e "\n  Waiting for new circuit..."; sleep 7
 
-    echo -e "\n  ${YELLOW}New IP:${RESET}"; show_ip
+    echo -e "\n  ${YELLOW}New:${RESET}"; show_ip
     echo -e "\n${GREEN}[✓] New circuit requested.${RESET}"
     echo -e "    ${YELLOW}Tip:${RESET} If the IP is unchanged, wait ~15 s and try again.\n"
 }
