@@ -12,8 +12,8 @@ This script intercepts all outgoing traffic at the operating system level using 
 
 ```
 Without tor-route:
-  Your machine ──────────────────────────────► Website
-                    (ISP sees everything)
+  Your machine ────────────────────────────────► Website
+                     (ISP sees everything)
 
 With tor-route:
   Your machine ──► Guard ──► Middle ──► Exit ──► Website
@@ -49,11 +49,12 @@ sudo pacman -S tor iptables curl iproute2
 
 ## Installation
 
+1. Download the script (or copy it manually)
 ```bash
-# 1. Download the script
-curl -O https://your-host/tor-route.sh   # or copy it manually
-
-# 2. Make it executable
+curl -O https://raw.githubusercontent.com/Soyadrul/tor-route/refs/heads/main/tor-route.sh
+```
+2. Make it executable
+```bash
 chmod +x tor-route.sh
 ```
 
@@ -215,4 +216,4 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 ## License
 
-MIT — do whatever you want with it, but don't hold the author liable.
+Do whatever you want with it, but don't hold the author liable.
