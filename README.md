@@ -160,6 +160,17 @@ Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or b
 
 ---
 
+## Verifying you are connected through Tor
+
+After running `sudo bash tor-route.sh start`, you can confirm that your traffic is actually going through the Tor network by visiting either of these sites in your browser:
+
+- **https://check.torproject.org/** — the official Tor Project checker. It will display a green message confirming you are using Tor, or a warning if you are not.
+- **https://www.whatismybrowser.com/detect/am-i-using-tor/** — an independent checker that detects Tor exit nodes and shows additional details about your browser's apparent identity.
+
+If either site reports that you are **not** using Tor after running `start`, run `sudo bash tor-route.sh status` and check that every line shows ✓ before investigating further.
+
+---
+
 ## Troubleshooting
 
 **Tor fails to start**
