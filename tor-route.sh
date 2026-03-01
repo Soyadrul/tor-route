@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  tor-route.sh — Route all system traffic through Tor on Arch Linux
-#  v5 — fixes: socket-activation bypass of systemd-resolved,
-#              unconditional restore of systemd-resolved on stop
+#  v6 — adds: exit node country selection (start/newnode CC),
+#              country display in status
 #
 #  Usage (must be run as root):
-#    sudo bash tor-route.sh start    → Enable Tor routing
-#    sudo bash tor-route.sh stop     → Disable Tor routing (back to normal)
-#    sudo bash tor-route.sh status   → Show whether Tor routing is active
-#    sudo bash tor-route.sh newnode  → Switch to a new Tor exit node (new IP)
+#    sudo bash tor-route.sh start [CC]   → Enable Tor routing (optional country code)
+#    sudo bash tor-route.sh stop         → Disable Tor routing (back to normal)
+#    sudo bash tor-route.sh status       → Show whether Tor routing is active
+#    sudo bash tor-route.sh newnode [CC] → Switch to a new Tor exit node (optional country)
 # =============================================================================
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -30,6 +30,10 @@ RESOLV_BACKUP="/tmp/resolv.conf.pre-tor"
 # `stop` reads it so it only restores the service if it was running originally.
 RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 
+# This file stores the selected exit node country code (if any).
+# Used by newnode to re-apply the same country constraint.
+EXIT_NODE_COUNTRY_FILE="/tmp/tor-route-exit-country"
+
 # All systemd units that together make up systemd-resolved.
 # We must mask ALL of them — masking only the service leaves the socket units
 # alive, and socket activation will silently revive the service the moment
@@ -40,10 +44,16 @@ RESOLVED_UNITS=(
     systemd-resolved-monitor.socket
 )
 
+# ── Country Codes ─────────────────────────────────────────────────────────────
+# List of valid ISO 3166-1 alpha-2 country codes for Tor exit node selection
+VALID_COUNTRY_CODES=(
+    AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW
+)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════╗"
-    echo -e "║        Tor Traffic Router  v5        ║"
+    echo -e "║        Tor Traffic Router  v6        ║"
     echo -e "╚══════════════════════════════════════╝${RESET}\n"
 }
 
@@ -67,13 +77,107 @@ check_dependencies() {
     fi
 }
 
+# ── Country Code Validation ───────────────────────────────────────────────────
+# Validates if the provided country code is valid (ISO 3166-1 alpha-2)
+validate_country_code() {
+    local code="$1"
+    code=$(echo "$code" | tr '[:lower:]' '[:upper:]')
+    for valid in "${VALID_COUNTRY_CODES[@]}"; do
+        [[ "$code" == "$valid" ]] && echo "$code" && return 0
+    done
+    return 1
+}
+
+# Get country name from code (simplified list of common countries)
+get_country_name() {
+    local code="$1"
+    case "$code" in
+        US) echo "United States" ;;
+        GB) echo "United Kingdom" ;;
+        DE) echo "Germany" ;;
+        FR) echo "France" ;;
+        NL) echo "Netherlands" ;;
+        CA) echo "Canada" ;;
+        AU) echo "Australia" ;;
+        JP) echo "Japan" ;;
+        SG) echo "Singapore" ;;
+        CH) echo "Switzerland" ;;
+        SE) echo "Sweden" ;;
+        NO) echo "Norway" ;;
+        FI) echo "Finland" ;;
+        DK) echo "Denmark" ;;
+        AT) echo "Austria" ;;
+        BE) echo "Belgium" ;;
+        ES) echo "Spain" ;;
+        IT) echo "Italy" ;;
+        PL) echo "Poland" ;;
+        CZ) echo "Czech Republic" ;;
+        RO) echo "Romania" ;;
+        UA) echo "Ukraine" ;;
+        RU) echo "Russia" ;;
+        BR) echo "Brazil" ;;
+        AR) echo "Argentina" ;;
+        MX) echo "Mexico" ;;
+        IN) echo "India" ;;
+        CN) echo "China" ;;
+        KR) echo "South Korea" ;;
+        HK) echo "Hong Kong" ;;
+        TW) echo "Taiwan" ;;
+        TH) echo "Thailand" ;;
+        MY) echo "Malaysia" ;;
+        ID) echo "Indonesia" ;;
+        PH) echo "Philippines" ;;
+        VN) echo "Vietnam" ;;
+        ZA) echo "South Africa" ;;
+        IL) echo "Israel" ;;
+        TR) echo "Turkey" ;;
+        AE) echo "United Arab Emirates" ;;
+        *) echo "Unknown" ;;
+    esac
+}
+
+# Fetch country code from IP address using ipapi.co API
+get_country_from_ip() {
+    local ip="$1"
+    local country_code
+    country_code=$(curl -s --max-time 10 "https://ipapi.co/${ip}/country/" 2>/dev/null | tr -d '[:space:]')
+    if [[ ${#country_code} -eq 2 ]]; then
+        echo "$country_code"
+        return 0
+    fi
+    return 1
+}
+
+# Save the selected country code to file
+save_country_selection() {
+    local code="$1"
+    if [[ -z "$code" ]]; then
+        rm -f "$EXIT_NODE_COUNTRY_FILE"
+    else
+        echo "$code" > "$EXIT_NODE_COUNTRY_FILE"
+    fi
+}
+
+# Load the previously selected country code from file
+load_country_selection() {
+    if [[ -f "$EXIT_NODE_COUNTRY_FILE" ]]; then
+        cat "$EXIT_NODE_COUNTRY_FILE"
+    fi
+}
+
 # ── torrc ─────────────────────────────────────────────────────────────────────
+# Configure torrc with optional exit node country constraint
+# Args: $1 = country code (optional, empty for random)
 configure_torrc() {
+    local country_code="$1"
     sed -i '/^# --- tor-route.sh/d
             /^VirtualAddrNetworkIPv4/d
             /^AutomapHostsOnResolve/d
             /^TransPort /d
-            /^DNSPort /d' "$TORRC"
+            /^DNSPort /d
+            /^ExitNodes /d
+            /^StrictNodes /d' "$TORRC"
+    
     cat >> "$TORRC" <<EOF
 
 # --- tor-route.sh start ---
@@ -81,9 +185,17 @@ VirtualAddrNetworkIPv4 10.192.0.0/10
 AutomapHostsOnResolve 1
 TransPort 127.0.0.1:${TOR_TRANS_PORT}
 DNSPort 127.0.0.1:${TOR_DNS_PORT}
-# --- tor-route.sh end ---
 EOF
-    echo -e "${YELLOW}[i] torrc: TransPort=${TOR_TRANS_PORT}, DNSPort=${TOR_DNS_PORT}${RESET}"
+
+    if [[ -n "$country_code" ]]; then
+        echo "ExitNodes {$country_code}" >> "$TORRC"
+        echo "StrictNodes 1" >> "$TORRC"
+        echo "# --- tor-route.sh end ---" >> "$TORRC"
+        echo -e "${YELLOW}[i] torrc: TransPort=${TOR_TRANS_PORT}, DNSPort=${TOR_DNS_PORT}, ExitNodes=${country_code}${RESET}"
+    else
+        echo "# --- tor-route.sh end ---" >> "$TORRC"
+        echo -e "${YELLOW}[i] torrc: TransPort=${TOR_TRANS_PORT}, DNSPort=${TOR_DNS_PORT} (random exit)${RESET}"
+    fi
 }
 
 cleanup_torrc() {
@@ -91,7 +203,9 @@ cleanup_torrc() {
             /^VirtualAddrNetworkIPv4/d
             /^AutomapHostsOnResolve/d
             /^TransPort /d
-            /^DNSPort /d' "$TORRC"
+            /^DNSPort /d
+            /^ExitNodes /d
+            /^StrictNodes /d' "$TORRC"
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
@@ -257,18 +371,45 @@ apply_iptables() {
 }
 
 # ── Public IP display ─────────────────────────────────────────────────────────
+# Fetch and display public IP with country information
+# Args: $1 = "quiet" to suppress output (returns IP via echo)
 show_ip() {
-    echo -e "${CYAN}[i] Fetching public IP...${RESET}"
-    local ip
+    local quiet="${1:-}"
+    local ip country_code country_name
+    
+    [[ "$quiet" != "quiet" ]] && echo -e "${CYAN}[i] Fetching public IP...${RESET}"
+    
     ip=$(curl -s --max-time 12 -4 https://api.ipify.org 2>/dev/null)
-    [[ -n "$ip" ]] \
-        && echo -e "    IPv4: ${BOLD}${ip}${RESET}" \
-        || echo -e "    ${YELLOW}IPv4: could not fetch (Tor may still be starting).${RESET}"
+    
+    if [[ -n "$ip" ]]; then
+        # Try to get country from IP
+        country_code=$(get_country_from_ip "$ip")
+        if [[ -n "$country_code" ]]; then
+            country_name=$(get_country_name "$country_code")
+            if [[ "$quiet" != "quiet" ]]; then
+                echo -e "    IPv4: ${BOLD}${ip}${RESET} (${country_code} — ${country_name})"
+            else
+                echo "$ip"
+            fi
+        else
+            if [[ "$quiet" != "quiet" ]]; then
+                echo -e "    IPv4: ${BOLD}${ip}${RESET}"
+            else
+                echo "$ip"
+            fi
+        fi
+    else
+        [[ "$quiet" != "quiet" ]] && echo -e "    ${YELLOW}IPv4: could not fetch (Tor may still be starting).${RESET}"
+        [[ "$quiet" == "quiet" ]] && echo ""
+    fi
+    
     local ip6
     ip6=$(curl -s --max-time 5 -6 https://api6.ipify.org 2>/dev/null)
-    [[ -n "$ip6" ]] \
-        && echo -e "    IPv6: ${RED}${BOLD}${ip6}  ← LEAK!${RESET}" \
-        || echo -e "    IPv6: ${GREEN}Blocked ✓${RESET}"
+    if [[ -n "$ip6" ]]; then
+        [[ "$quiet" != "quiet" ]] && echo -e "    IPv6: ${RED}${BOLD}${ip6}  ← LEAK!${RESET}"
+    else
+        [[ "$quiet" != "quiet" ]] && echo -e "    IPv6: ${GREEN}Blocked ✓${RESET}"
+    fi
 }
 
 # =============================================================================
@@ -280,9 +421,23 @@ cmd_start() {
     require_root start
     check_dependencies
 
+    local country_code=""
+    if [[ -n "$1" ]]; then
+        country_code=$(validate_country_code "$1")
+        if [[ -z "$country_code" ]]; then
+            echo -e "${RED}[✗] Invalid country code: $1${RESET}"
+            echo -e "    Use a valid ISO 3166-1 alpha-2 code (e.g., US, DE, GB, FR)"
+            echo -e "    Omit the argument for random exit node selection."
+            exit 1
+        fi
+    fi
+
     echo -e "${CYAN}[→] Starting Tor routing...${RESET}\n"
-    configure_torrc
+    configure_torrc "$country_code"
     fix_dns_start
+
+    # Save country selection for future newnode calls
+    save_country_selection "$country_code"
 
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
     systemctl restart tor
@@ -307,11 +462,18 @@ cmd_start() {
     apply_iptables
 
     echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
+    if [[ -n "$country_code" ]]; then
+        local country_name
+        country_name=$(get_country_name "$country_code")
+        echo -e "    ${YELLOW}Exit node country:${RESET} ${country_code} — ${country_name}"
+    else
+        echo -e "    ${YELLOW}Exit node country:${RESET} Random (any country)"
+    fi
     echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
     echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
     show_ip
-    echo -e "\n    ${BOLD}sudo bash $0 newnode${RESET}  — new exit node / new IP"
-    echo -e "    ${BOLD}sudo bash $0 stop${RESET}     — restore normal internet\n"
+    echo -e "\n    ${BOLD}sudo bash $0 newnode [CC]${RESET}  — new exit node (optional country)"
+    echo -e "    ${BOLD}sudo bash $0 stop${RESET}           — restore normal internet\n"
 }
 
 cmd_stop() {
@@ -361,6 +523,17 @@ cmd_status() {
     done
     $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
 
+    # Show exit node country configuration
+    local saved_country
+    saved_country=$(load_country_selection)
+    if [[ -n "$saved_country" ]]; then
+        local country_name
+        country_name=$(get_country_name "$saved_country")
+        echo -e "  Exit node country: ${GREEN}${BOLD}${saved_country} — ${country_name} ✓${RESET}"
+    else
+        echo -e "  Exit node country: ${YELLOW}Random (any country)${RESET}"
+    fi
+
     if systemctl is-active --quiet tor; then
         echo ""; verify_tor_ports
     fi
@@ -376,9 +549,71 @@ cmd_newnode() {
         echo -e "${RED}[✗] Tor is not running. Run: sudo bash $0 start${RESET}"; exit 1
     fi
 
+    local country_code=""
+    local country_name=""
+
+    # Check if user provided a country code
+    if [[ -n "$1" ]]; then
+        country_code=$(validate_country_code "$1")
+        if [[ -z "$country_code" ]]; then
+            echo -e "${RED}[✗] Invalid country code: $1${RESET}"
+            echo -e "    Use a valid ISO 3166-1 alpha-2 code (e.g., US, DE, GB, FR)"
+            echo -e "    Omit the argument to use the current setting."
+            exit 1
+        fi
+        save_country_selection "$country_code"
+        country_name=$(get_country_name "$country_code")
+
+        # Reconfigure Tor with new country constraint
+        configure_torrc "$country_code"
+        country_changed=true
+        echo -e "${YELLOW}[i] Exit node country changed to: ${country_code} — ${country_name}${RESET}"
+        echo -e "${YELLOW}[i] Restarting Tor to apply new exit node configuration...${RESET}\n"
+        
+        # Restart Tor to apply the new ExitNodes setting (reload is not sufficient)
+        systemctl restart tor
+        echo -n "    Bootstrapping"
+        for i in {1..25}; do
+            sleep 1; echo -n "."
+            journalctl -u tor -n 30 --no-pager 2>/dev/null | grep -q "Bootstrapped 100%" && break
+        done
+        echo ""
+        
+        if ! systemctl is-active --quiet tor; then
+            echo -e "\n${RED}[✗] Tor failed to restart. Run: journalctl -u tor -n 50${RESET}"
+            exit 1
+        fi
+        echo -e "${GREEN}[✓] Tor is running with new configuration.${RESET}\n"
+    else
+        # Check for previously saved country preference
+        country_code=$(load_country_selection)
+        if [[ -n "$country_code" ]]; then
+            country_name=$(get_country_name "$country_code")
+            echo -e "${YELLOW}[i] Using saved country preference: ${country_code} — ${country_name}${RESET}"
+            # Ensure torrc has the correct ExitNodes setting
+            configure_torrc "$country_code"
+            echo -e "${YELLOW}[i] Restarting Tor to apply exit node configuration...${RESET}\n"
+            systemctl restart tor
+            echo -n "    Bootstrapping"
+            for i in {1..25}; do
+                sleep 1; echo -n "."
+                journalctl -u tor -n 30 --no-pager 2>/dev/null | grep -q "Bootstrapped 100%" && break
+            done
+            echo ""
+            if ! systemctl is-active --quiet tor; then
+                echo -e "\n${RED}[✗] Tor failed to restart. Run: journalctl -u tor -n 50${RESET}"
+                exit 1
+            fi
+            echo -e "${GREEN}[✓] Tor is running with saved country configuration.${RESET}\n"
+        else
+            echo ""
+        fi
+    fi
+
     echo -e "${CYAN}[→] Requesting a new Tor circuit (new exit node = new IP)...${RESET}\n"
     echo -e "  ${YELLOW}Current:${RESET}"; show_ip
 
+    # Signal Tor to build a new circuit
     systemctl kill --signal=SIGHUP tor
     echo -e "\n  Waiting for new circuit..."; sleep 7
 
@@ -391,16 +626,23 @@ cmd_newnode() {
 #  ENTRY POINT
 # =============================================================================
 case "$1" in
-    start)   cmd_start   ;;
+    start)   cmd_start   "$2" ;;
     stop)    cmd_stop    ;;
     status)  cmd_status  ;;
-    newnode) cmd_newnode ;;
+    newnode) cmd_newnode "$2" ;;
     *)
         banner
-        echo -e "  ${BOLD}Usage:${RESET}  sudo bash $0 {start|stop|status|newnode}\n"
+        echo -e "  ${BOLD}Usage:${RESET}  sudo bash $0 {start|stop|status|newnode} [country_code]\n"
         echo -e "  ${GREEN}start${RESET}    Route all traffic through Tor"
+        echo -e "             Optional: country code (e.g., US, DE, GB, FR, NL)"
         echo -e "  ${RED}stop${RESET}     Restore normal internet routing"
-        echo -e "  ${CYAN}status${RESET}   Show routing status and public IP"
-        echo -e "  ${YELLOW}newnode${RESET}  Switch to a new Tor exit node (new IP)\n"
+        echo -e "  ${CYAN}status${RESET}   Show routing status and public IP with country"
+        echo -e "  ${YELLOW}newnode${RESET}  Switch to a new Tor exit node (new IP)"
+        echo -e "             Optional: country code to change exit node country\n"
+        echo -e "  ${BOLD}Examples:${RESET}"
+        echo -e "    sudo bash $0 start          # Random exit node"
+        echo -e "    sudo bash $0 start DE       # Germany exit node"
+        echo -e "    sudo bash $0 newnode US     # Switch to US exit node"
+        echo -e "    sudo bash $0 status         # Show current configuration\n"
         exit 1 ;;
 esac

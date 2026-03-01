@@ -1,6 +1,6 @@
 # tor-route.sh
 
-A Bash script for Arch Linux that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node.
+A Bash script for Arch Linux that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node. **Now with optional exit node country selection.**
 
 ---
 
@@ -67,31 +67,55 @@ No other configuration is required before first use.
 All commands must be run as root.
 
 ```bash
-sudo bash tor-route.sh <command>
+sudo bash tor-route.sh <command> [country_code]
 ```
 
 | Command | Description |
 |---|---|
-| `start` | Enable Tor routing — all traffic goes through Tor |
+| `start [CC]` | Enable Tor routing — all traffic goes through Tor (optional country code) |
 | `stop` | Disable Tor routing — restore normal internet |
-| `status` | Show current routing state and public IP |
-| `newnode` | Request a new Tor exit node (gives you a new IP address) |
+| `status` | Show current routing state, public IP, and exit node country |
+| `newnode [CC]` | Request a new Tor exit node (gives you a new IP address, optional country) |
 
 ### Examples
 
 ```bash
-# Start routing through Tor
+# Start routing through Tor with random exit node
 sudo bash tor-route.sh start
 
-# Check what IP the outside world sees
+# Start routing with a specific exit node country (Germany)
+sudo bash tor-route.sh start DE
+
+# Start routing with US exit node
+sudo bash tor-route.sh start US
+
+# Check what IP the outside world sees (shows country)
 sudo bash tor-route.sh status
 
 # Get a fresh IP address without stopping Tor
 sudo bash tor-route.sh newnode
 
+# Switch to a specific country (e.g., Netherlands)
+sudo bash tor-route.sh newnode NL
+
 # Restore your normal internet connection
 sudo bash tor-route.sh stop
 ```
+
+### Country Codes
+
+Use ISO 3166-1 alpha-2 country codes (case-insensitive). Common examples:
+
+| Code | Country | Code | Country |
+|---|---|---|---|
+| `US` | United States | `DE` | Germany |
+| `GB` | United Kingdom | `FR` | France |
+| `NL` | Netherlands | `CA` | Canada |
+| `AU` | Australia | `JP` | Japan |
+| `SG` | Singapore | `CH` | Switzerland |
+| `SE` | Sweden | `NO` | Norway |
+
+> **Note:** Country selection uses Tor's `ExitNodes` directive with `StrictNodes 1`. If the selected country has few or no available exit nodes, Tor may fail to build circuits. Countries with many exit nodes (US, DE, NL) work more reliably than smaller countries. Use `newnode` to try different exit nodes within the selected country.
 
 ---
 
@@ -134,6 +158,8 @@ Your machine ──► Guard node ──► Middle node ──► Exit node ─�
 ```
 
 The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address. Your current IP is shown before and after so you can confirm the change.
+
+**With country selection:** If you provide a country code (e.g., `sudo bash tor-route.sh newnode DE`), the script will reconfigure Tor to prefer exit nodes in that country before requesting a new circuit. If no country code is provided, it uses the country set during `start` (if any) or random selection.
 
 ---
 
