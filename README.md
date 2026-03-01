@@ -72,22 +72,35 @@ sudo bash tor-route.sh <command>
 
 | Command | Description |
 |---|---|
-| `start` | Enable Tor routing — all traffic goes through Tor |
+| `start [CC]` | Enable Tor routing. `CC` is an optional 2-letter country code to pin the exit node |
 | `stop` | Disable Tor routing — restore normal internet |
-| `status` | Show current routing state and public IP |
-| `newnode` | Request a new Tor exit node (gives you a new IP address) |
+| `status` | Show current routing state, exit node country, and public IP |
+| `newnode [CC]` | Request a new Tor exit node. Optionally switch or clear the country pin |
+| `countries` | Print a full list of all supported country codes |
 
 ### Examples
 
 ```bash
-# Start routing through Tor
+# Start routing through Tor with a random exit node
 sudo bash tor-route.sh start
 
-# Check what IP the outside world sees
+# Start routing through Tor with a US exit node
+sudo bash tor-route.sh start us
+
+# Start routing through Tor with a German exit node
+sudo bash tor-route.sh start de
+
+# Check what IP and country the outside world sees
 sudo bash tor-route.sh status
 
-# Get a fresh IP address without stopping Tor
+# Get a fresh random IP (clears any country pin)
 sudo bash tor-route.sh newnode
+
+# Switch to a new Japanese exit node
+sudo bash tor-route.sh newnode jp
+
+# List all supported country codes
+sudo bash tor-route.sh countries
 
 # Restore your normal internet connection
 sudo bash tor-route.sh stop
@@ -97,14 +110,20 @@ sudo bash tor-route.sh stop
 
 ## What each command does internally
 
-### `start`
+### `start [CC]`
 
-1. Appends transparent proxy settings to `/etc/tor/torrc` (`TransPort`, `DNSPort`, `AutomapHostsOnResolve`).
-2. Detects and records whether `systemd-resolved` was active, then **masks** the service and its socket units (`systemd-resolved.service`, `systemd-resolved-varlink.socket`, `systemd-resolved-monitor.socket`) to prevent them from restarting automatically via socket activation.
-3. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener.
-4. Starts the Tor service and waits for it to bootstrap to 100%.
-5. Verifies that Tor is actually listening on both expected ports before touching the firewall.
-6. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
+1. Validates the optional country code `CC` against the full ISO 3166-1 alpha-2 list.
+2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country.
+3. Saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
+4. Detects and records whether `systemd-resolved` was active, then **masks** the service and its socket units (`systemd-resolved.service`, `systemd-resolved-varlink.socket`, `systemd-resolved-monitor.socket`) to prevent them from restarting automatically via socket activation.
+5. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener.
+6. Starts the Tor service and waits for it to bootstrap to 100%.
+7. Verifies that Tor is actually listening on both expected ports before touching the firewall.
+8. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
+
+### `countries`
+
+Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes alongside usage examples. Useful to look up the code for a specific country before running `start` or `newnode`.
 
 ### `stop`
 
@@ -122,18 +141,19 @@ Displays a live summary:
 - Whether UDP / WebRTC is blocked
 - Whether IPv6 is blocked
 - Whether `systemd-resolved` and its socket units are masked
+- The **configured exit node country** (pinned code or `Random`)
 - Whether Tor is listening on the correct ports
-- Your current public IPv4 and IPv6 addresses
+- Your current public IPv4, country, ISP, and IPv6 leak status
 
-### `newnode`
+### `newnode [CC]`
 
-Sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
 ```
 
-The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address. Your current IP is shown before and after so you can confirm the change.
+The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. The current IP and country are shown before and after so you can confirm the change.
 
 ---
 
@@ -153,6 +173,10 @@ Because Tor cannot carry UDP traffic (other than its own internal DNS), all non-
 ### Tor is not a VPN
 
 Tor provides anonymity through routing, not encryption of the final hop. Traffic between the exit node and the destination website is **not encrypted by Tor** unless the site uses HTTPS. Always ensure you are visiting HTTPS sites for end-to-end encryption.
+
+### Exit node country pinning
+
+When a country code is specified, Tor uses `StrictNodes 1`, which means it will **only** use exits in that country and will not fall back to others if none are available. If Tor appears to stall at bootstrapping or stops routing traffic, the chosen country may have no available exit nodes at that moment — run `newnode` without a country code to switch back to random, or try a different country.
 
 ### Exit node blocking
 
@@ -212,6 +236,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 | `/tmp/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active) |
 | `/tmp/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
 | `/tmp/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
+| `/tmp/tor-route-country` | Records the active exit node country (or `random`) while Tor routing is active |
 | `/tmp/tor-route-resolved-state` | Records whether `systemd-resolved` was running before `start` |
 
 ---
