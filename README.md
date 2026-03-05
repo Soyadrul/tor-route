@@ -1,4 +1,4 @@
-# tor-route.sh
+# tor-route
 
 A Bash script for Arch Linux that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node.
 
@@ -227,4 +227,4 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 ## License
 
-Do whatever you want with it, but don't hold the author liable.
+This project is open source and avilable under the [GPL-3.0 License](LICENSE).
