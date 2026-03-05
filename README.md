@@ -2,6 +2,34 @@
 
 A Bash script for Arch Linux that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node.
 
+> [!WARNING]
+> Tested only on [Arch Linux](https://archlinux.org/) but SHOULD work on any other distro.
+
+## Table of Contents:
+1.  [How it works](#how-it-works)
+    1.  [What gets protected](#what-gets-protected)
+2.  [Requirements](#requirements)
+3.  [Installation](#installation)
+4.  [Usage](#usage)
+    1.  [Examples](#examples)
+5.  [What each command does internally](#what-each-command-does-internally)
+    1.  [`start [CC]`](#start-cc)
+    2.  [`countries`](#countries)
+    3.  [`stop`](#stop)
+    4.  [`status`](#status)
+    5.  [`newnode [CC]`](#newnode-cc)
+7.  [Known limitations](#known-limitations)
+    1.  [Browser WebRTC](#browser-webrtc)
+    2.  [UDP applications](#udp-applications)
+    3.  [Tor is not a VPN](#tor-is-not-a-vpn)
+    4.  [Exit node country pinning](#exit-node-country-pinning)
+    5.  [Exit node blocking](#exit-node-blocking)
+9.  [Verifying you are connected through Tor](#verifying-you-are-connected-through-tor)
+10.  [Troubleshooting](#troubleshooting)
+11.  [File locations](#file-locations)
+12.  [Security notes](#security-notes)
+13.  [License](#license)
+
 ---
 
 ## How it works
@@ -34,13 +62,12 @@ With tor-route:
 
 ## Requirements
 
-- **Arch Linux** (or an Arch-based distro such as Manjaro, EndeavourOS)
 - **Root / sudo access**
-- The following packages:
+- The following Arch packages:
 
-```bash
-sudo pacman -S tor iptables curl iproute2
-```
+  ```bash
+  sudo pacman -S tor iptables curl iproute2
+  ```
 
 > `iproute2` provides the `ss` command used for port verification.  
 > `curl` is used to display your public IP before and after switching.
@@ -49,13 +76,10 @@ sudo pacman -S tor iptables curl iproute2
 
 ## Installation
 
-1. Download the script (or copy it manually)
+Run the following command to download and install `tor-route` on any Linux distribution:
+
 ```bash
-curl -O https://raw.githubusercontent.com/Soyadrul/tor-route/refs/heads/main/tor-route.sh
-```
-2. Make it executable
-```bash
-chmod +x tor-route.sh
+sudo curl -fsSL https://raw.githubusercontent.com/Soyadrul/tor-route/main/tor-route.sh -o /usr/local/bin/tor-route && sudo chmod +x /usr/local/bin/tor-route
 ```
 
 No other configuration is required before first use.
@@ -67,7 +91,7 @@ No other configuration is required before first use.
 All commands must be run as root.
 
 ```bash
-sudo bash tor-route.sh <command>
+sudo tor-route <command>
 ```
 
 | Command | Description |
@@ -82,28 +106,28 @@ sudo bash tor-route.sh <command>
 
 ```bash
 # Start routing through Tor with a random exit node
-sudo bash tor-route.sh start
+sudo tor-route start
 
 # Start routing through Tor with a US exit node
-sudo bash tor-route.sh start us
+sudo tor-route start us
 
 # Start routing through Tor with a German exit node
-sudo bash tor-route.sh start de
+sudo tor-route start de
 
 # Check what IP and country the outside world sees
-sudo bash tor-route.sh status
+sudo tor-route status
 
 # Get a fresh random IP (clears any country pin)
-sudo bash tor-route.sh newnode
+sudo tor-route newnode
 
 # Switch to a new Japanese exit node
-sudo bash tor-route.sh newnode jp
+sudo tor-route newnode jp
 
 # List all supported country codes
-sudo bash tor-route.sh countries
+sudo tor-route countries
 
 # Restore your normal internet connection
-sudo bash tor-route.sh stop
+sudo tor-route stop
 ```
 
 ---
@@ -186,12 +210,12 @@ Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or b
 
 ## Verifying you are connected through Tor
 
-After running `sudo bash tor-route.sh start`, you can confirm that your traffic is actually going through the Tor network by visiting either of these sites in your browser:
+After running `sudo tor-route start`, you can confirm that your traffic is actually going through the Tor network by visiting either of these sites in your browser:
 
 - **https://check.torproject.org/** — the official Tor Project checker. It will display a green message confirming you are using Tor, or a warning if you are not.
 - **https://www.whatismybrowser.com/detect/am-i-using-tor/** — an independent checker that detects Tor exit nodes and shows additional details about your browser's apparent identity.
 
-If either site reports that you are **not** using Tor after running `start`, run `sudo bash tor-route.sh status` and check that every line shows ✓ before investigating further.
+If either site reports that you are **not** using Tor after running `start`, run `sudo tor-route status` and check that every line shows ✓ before investigating further.
 
 ---
 
