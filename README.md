@@ -34,7 +34,7 @@ A Bash script for Arch Linux that transparently routes all system TCP traffic th
 
 ## How it works
 
-When you connect to a website normally, your traffic travels directly from your machine to the destination server — your ISP can see every request, and every website sees your real public IP address.
+When you connect to a website normally, your traffic travels directly from your machine to the destination server - your ISP can see every request, and every website sees your real public IP address.
 
 This script intercepts all outgoing traffic at the operating system level using **iptables** (Linux's built-in firewall) and redirects it into a local Tor process running in *transparent proxy* mode. Tor then bounces your traffic through a chain of three volunteer-operated servers around the world before it reaches the destination. The website only ever sees the IP address of the final server in that chain (the *exit node*), not yours.
 
@@ -76,10 +76,15 @@ With tor-route:
 
 ## Installation
 
-Run the following command to download and install `tor-route` on any Linux distribution:
+> [!IMPORTANT]
+> The command below installs the **latest commit** from the `main` branch (bleeding edge).
+> For a stable release, use the [latest release](https://github.com/Soyadrul/tor-route/releases/latest) instead.
+
+Run the following command to download and install the latest **bleeding-edge** version of `tor-route` on any Linux distribution:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/Soyadrul/tor-route/main/tor-route.sh -o /usr/local/bin/tor-route && sudo chmod +x /usr/local/bin/tor-route
+sudo curl -fsSL https://raw.githubusercontent.com/Soyadrul/tor-route/main/tor-route.sh -o /usr/local/bin/tor-route \
+  && sudo chmod +x /usr/local/bin/tor-route
 ```
 
 No other configuration is required before first use.
@@ -97,7 +102,7 @@ sudo tor-route <command>
 | Command | Description |
 |---|---|
 | `start [CC]` | Enable Tor routing. `CC` is an optional 2-letter country code to pin the exit node |
-| `stop` | Disable Tor routing — restore normal internet |
+| `stop` | Disable Tor routing - restore normal internet |
 | `status` | Show current routing state, exit node country, and public IP |
 | `newnode [CC]` | Request a new Tor exit node. Optionally switch or clear the country pin |
 | `countries` | Print a full list of all supported country codes |
@@ -153,7 +158,7 @@ Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes along
 
 1. Restores the original `iptables` and `ip6tables` rules from backup.
 2. Unmasks all `systemd-resolved` units and restores `/etc/resolv.conf`.
-3. Only restarts `systemd-resolved` if it was running before `start` was called — the system is left exactly as it was found.
+3. Only restarts `systemd-resolved` if it was running before `start` was called - the system is left exactly as it was found.
 4. Stops the Tor service.
 5. Removes the settings added to `/etc/tor/torrc`.
 
@@ -192,7 +197,7 @@ The script blocks WebRTC UDP at the OS level, but some browsers can still expose
 
 ### UDP applications
 
-Because Tor cannot carry UDP traffic (other than its own internal DNS), all non-DNS UDP is dropped while Tor routing is active. Applications that rely on UDP — such as VoIP clients, some games, or QUIC-based services — will not work until you run `stop`.
+Because Tor cannot carry UDP traffic (other than its own internal DNS), all non-DNS UDP is dropped while Tor routing is active. Applications that rely on UDP - such as VoIP clients, some games, or QUIC-based services - will not work until you run `stop`.
 
 ### Tor is not a VPN
 
@@ -200,11 +205,11 @@ Tor provides anonymity through routing, not encryption of the final hop. Traffic
 
 ### Exit node country pinning
 
-When a country code is specified, Tor uses `StrictNodes 1`, which means it will **only** use exits in that country and will not fall back to others if none are available. If Tor appears to stall at bootstrapping or stops routing traffic, the chosen country may have no available exit nodes at that moment — run `newnode` without a country code to switch back to random, or try a different country.
+When a country code is specified, Tor uses `StrictNodes 1`, which means it will **only** use exits in that country and will not fall back to others if none are available. If Tor appears to stall at bootstrapping or stops routing traffic, the chosen country may have no available exit nodes at that moment - run `newnode` without a country code to switch back to random, or try a different country.
 
 ### Exit node blocking
 
-Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or block known Tor exit nodes. This is expected behaviour — use `newnode` to try a different exit node, or use [Tor bridges](https://bridges.torproject.org/) for more persistent access.
+Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or block known Tor exit nodes. This is expected behaviour - use `newnode` to try a different exit node, or use [Tor bridges](https://bridges.torproject.org/) for more persistent access.
 
 ---
 
@@ -212,8 +217,8 @@ Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or b
 
 After running `sudo tor-route start`, you can confirm that your traffic is actually going through the Tor network by visiting either of these sites in your browser:
 
-- **https://check.torproject.org/** — the official Tor Project checker. It will display a green message confirming you are using Tor, or a warning if you are not.
-- **https://www.whatismybrowser.com/detect/am-i-using-tor/** — an independent checker that detects Tor exit nodes and shows additional details about your browser's apparent identity.
+- **https://check.torproject.org/** - the official Tor Project checker. It will display a green message confirming you are using Tor, or a warning if you are not.
+- **https://www.whatismybrowser.com/detect/am-i-using-tor/** - an independent checker that detects Tor exit nodes and shows additional details about your browser's apparent identity.
 
 If either site reports that you are **not** using Tor after running `start`, run `sudo tor-route status` and check that every line shows ✓ before investigating further.
 
@@ -230,13 +235,13 @@ Look for permission errors or port conflicts.
 **IP still shows as my real address after `start`**
 
 Run `status` and check every line:
-- `TCP routing: Through Tor ✓` — iptables rules are applied
-- `UDP / WebRTC: Blocked ✓` — non-DNS UDP is dropped
-- `IPv6: Blocked ✓` — no IPv6 leak
-- `DNS (resolved): All units masked ✓` — resolver cannot bypass Tor
-- `DNSPort 5353: Listening ✓` — Tor's DNS is actually running
+- `TCP routing: Through Tor ✓` - iptables rules are applied
+- `UDP / WebRTC: Blocked ✓` - non-DNS UDP is dropped
+- `IPv6: Blocked ✓` - no IPv6 leak
+- `DNS (resolved): All units masked ✓` - resolver cannot bypass Tor
+- `DNSPort 5353: Listening ✓` - Tor's DNS is actually running
 
-If all lines show ✓ but the IP check website still shows your real IP, the website itself may be using WebRTC JavaScript — disable WebRTC in your browser as described above.
+If all lines show ✓ but the IP check website still shows your real IP, the website itself may be using WebRTC JavaScript - disable WebRTC in your browser as described above.
 
 **DNS not resolving after `stop`**
 
@@ -255,8 +260,8 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 | Path | Purpose |
 |---|---|
-| `/etc/tor/torrc` | Tor configuration — the script appends and removes its own block |
-| `/etc/resolv.conf` | DNS resolver config — replaced during `start`, restored on `stop` |
+| `/etc/tor/torrc` | Tor configuration - the script appends and removes its own block |
+| `/etc/resolv.conf` | DNS resolver config - replaced during `start`, restored on `stop` |
 | `/tmp/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active) |
 | `/tmp/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
 | `/tmp/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
@@ -269,7 +274,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 - This script is intended for **personal privacy use** on your own machine.
 - It does not protect traffic from other devices on your network.
-- Using Tor may be restricted or illegal in some countries — check your local laws.
+- Using Tor may be restricted or illegal in some countries - check your local laws.
 - For maximum anonymity, use the [Tor Browser](https://www.torproject.org/download/) which includes additional fingerprinting protections that this script cannot provide.
 
 ---
