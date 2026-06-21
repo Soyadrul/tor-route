@@ -64,6 +64,43 @@ resolver_mask_now()    { systemctl mask --now "$1"; }
 resolver_unmask()      { systemctl unmask "$1"; }
 resolver_is_active()   { systemctl is-active --quiet "$1" 2>/dev/null; }
 
+detect_init() {
+    local pid1
+    pid1=$(cat /proc/1/comm 2>/dev/null)
+
+    case "$pid1" in
+        systemd)                echo "systemd"  ;;
+        openrc-init|openrc)     echo "openrc"   ;;
+        runit)                  echo "runit"    ;;
+        init)
+            if command -v openrc &>/dev/null; then
+                echo "openrc"
+            else
+                echo "sysvinit"
+            fi
+            ;;
+        *)
+            if   command -v systemctl  &>/dev/null; then echo "systemd"
+            elif command -v rc-service &>/dev/null; then echo "openrc"
+            elif command -v runsvdir   &>/dev/null; then echo "runit"
+            else return 1
+            fi ;;
+    esac
+}
+
+require_init() {
+    local init
+    init=$(detect_init) || {
+        echo -e "${RED}[✗] Could not detect init system.${RESET}"; exit 1
+    }
+    if [[ "$init" != "systemd" ]]; then
+        echo -e "${RED}[✗] Init system '${init}' is not yet supported.${RESET}"
+        echo -e "    Only systemd is supported at the moment."
+        echo -e "    Check the TO-DO list for planned init system support."
+        exit 1
+    fi
+}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════════╗"
@@ -407,7 +444,7 @@ show_ip() {
 cmd_start() {
     banner
     require_root start
-    check_dependencies
+    require_init
 
     # Parse optional country code argument ($2 when called as `start CC`)
     local country=""
@@ -458,6 +495,7 @@ cmd_start() {
 cmd_stop() {
     banner
     require_root stop
+    require_init
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
     restore_iptables
@@ -474,6 +512,7 @@ cmd_stop() {
 
 cmd_status() {
     banner
+    require_init
     echo -e "${CYAN}[→] Status:${RESET}\n"
 
     service_tor_running \
@@ -525,6 +564,7 @@ cmd_status() {
 cmd_newnode() {
     banner
     require_root newnode
+    require_init
 
     if ! service_tor_running; then
         echo -e "${RED}[✗] Tor is not running. Run: sudo ${0##*/} start${RESET}"; exit 1
