@@ -41,9 +41,9 @@ COUNTRY_FILE="/tmp/tor-route-country"
 # alive, and socket activation will silently revive the service the moment
 # any DNS traffic appears (which is what caused the v4 leak).
 RESOLVED_UNITS=(
-    systemd-resolved.service
     systemd-resolved-varlink.socket
     systemd-resolved-monitor.socket
+    systemd-resolved.service
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
