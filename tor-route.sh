@@ -46,6 +46,24 @@ RESOLVED_UNITS=(
     systemd-resolved.service
 )
 
+# ── Init system abstraction ───────────────────────────────────────────────────
+# Thin wrappers around init-system-specific commands.
+# Currently implements the systemd backend. Adding a new init system means
+# replacing the bodies of these functions (and resolver unit names above).
+
+service_tor_start()    { systemctl start tor; }
+service_tor_stop()     { systemctl stop tor; }
+service_tor_restart()  { systemctl restart tor; }
+service_tor_running()  { systemctl is-active --quiet tor; }
+service_tor_reload()   { systemctl kill --signal=SIGHUP tor; }
+service_tor_log()      { journalctl -u tor "$@"; }
+
+resolver_running()     { systemctl is-active --quiet systemd-resolved.service; }
+resolver_start()       { systemctl start systemd-resolved.service; }
+resolver_mask_now()    { systemctl mask --now "$1"; }
+resolver_unmask()      { systemctl unmask "$1"; }
+resolver_is_active()   { systemctl is-active --quiet "$1" 2>/dev/null; }
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════════╗"
@@ -198,7 +216,7 @@ fix_dns_start() {
     # We check whether systemd-resolved.service is currently active and save
     # "yes" or "no" to a temp file. `stop` will read this file and only
     # restore the service if it was running before we started.
-    if systemctl is-active --quiet systemd-resolved.service; then
+    if resolver_running; then
         echo "yes" > "$RESOLVED_STATE_FILE"
         echo -e "${YELLOW}[i] systemd-resolved was running - will restore it on stop.${RESET}"
     else
@@ -220,7 +238,7 @@ fix_dns_start() {
     # which is exactly what was happening in a previous version of this script.
     echo -e "${YELLOW}[i] Masking all systemd-resolved units (service + sockets)...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
-        systemctl mask --now "$unit" 2>/dev/null && \
+        resolver_mask_now "$unit" 2>/dev/null && \
             echo -e "    Masked: ${unit}" || \
             echo -e "    ${YELLOW}(skipped - not found: ${unit})${RESET}"
     done
@@ -237,7 +255,7 @@ fix_dns_stop() {
     # Unmask and re-enable all units we masked
     echo -e "${YELLOW}[i] Unmasking systemd-resolved units...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
-        systemctl unmask "$unit" 2>/dev/null && \
+        resolver_unmask "$unit" 2>/dev/null && \
             echo -e "    Unmasked: ${unit}" || \
             echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
     done
@@ -260,7 +278,7 @@ fix_dns_stop() {
     rm -f "$RESOLVED_STATE_FILE"
 
     if [[ "$was_running" == "yes" ]]; then
-        systemctl start systemd-resolved.service
+        resolver_start
         echo -e "${GREEN}[✓] systemd-resolved restored (it was running before).${RESET}"
     else
         echo -e "${YELLOW}[i] systemd-resolved was not running before - leaving it stopped.${RESET}"
@@ -408,22 +426,22 @@ cmd_start() {
     fix_dns_start
 
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
-    systemctl restart tor
+    service_tor_restart
     echo -n "    Bootstrapping"
     for i in {1..25}; do
         sleep 1; echo -n "."
-        journalctl -u tor -n 30 --no-pager 2>/dev/null | grep -q "Bootstrapped 100%" && break
+        service_tor_log -n 30 --no-pager 2>/dev/null | grep -q "Bootstrapped 100%" && break
     done
     echo ""
 
-    if ! systemctl is-active --quiet tor; then
+    if ! service_tor_running; then
         echo -e "${RED}[✗] Tor failed to start. Run: journalctl -u tor -n 50${RESET}"
         fix_dns_stop; cleanup_torrc; exit 1
     fi
     echo -e "${GREEN}[✓] Tor is running.${RESET}\n"
 
     if ! verify_tor_ports; then
-        fix_dns_stop; cleanup_torrc; systemctl stop tor; exit 1
+        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
     fi
 
     save_iptables
@@ -444,7 +462,7 @@ cmd_stop() {
 
     restore_iptables
     fix_dns_stop
-    systemctl stop tor
+    service_tor_stop
     echo -e "${GREEN}[✓] Tor stopped.${RESET}"
     cleanup_torrc
 
@@ -458,7 +476,7 @@ cmd_status() {
     banner
     echo -e "${CYAN}[→] Status:${RESET}\n"
 
-    systemctl is-active --quiet tor \
+    service_tor_running \
         && echo -e "  Tor service:       ${GREEN}${BOLD}Running ✓${RESET}" \
         || echo -e "  Tor service:       ${RED}${BOLD}Stopped${RESET}"
 
@@ -477,7 +495,7 @@ cmd_status() {
     # Check the service AND its socket units
     local resolved_ok=true
     for unit in "${RESOLVED_UNITS[@]}"; do
-        if systemctl is-active --quiet "$unit" 2>/dev/null; then
+        if resolver_is_active "$unit"; then
             resolved_ok=false
             echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE - may leak!${RESET}"
         fi
@@ -497,7 +515,7 @@ cmd_status() {
         echo -e "  Exit node country: ${YELLOW}Unknown (Tor not started by this script)${RESET}"
     fi
 
-    if systemctl is-active --quiet tor; then
+    if service_tor_running; then
         echo ""; verify_tor_ports
     fi
 
@@ -508,7 +526,7 @@ cmd_newnode() {
     banner
     require_root newnode
 
-    if ! systemctl is-active --quiet tor; then
+    if ! service_tor_running; then
         echo -e "${RED}[✗] Tor is not running. Run: sudo ${0##*/} start${RESET}"; exit 1
     fi
 
@@ -539,7 +557,7 @@ cmd_newnode() {
 
     # SIGHUP = reload config and rebuild all circuits.
     # New circuit = new Guard → Middle → Exit chain = new public IP.
-    systemctl kill --signal=SIGHUP tor
+    service_tor_reload
     echo -e "\n  Waiting for new circuit..."; sleep 7
 
     echo -e "\n  ${YELLOW}New:${RESET}"; show_ip
