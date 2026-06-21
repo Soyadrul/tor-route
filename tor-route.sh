@@ -36,33 +36,89 @@ RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 # can read it back without re-parsing torrc.
 COUNTRY_FILE="/tmp/tor-route-country"
 
-# All systemd units that together make up systemd-resolved.
-# We must mask ALL of them - masking only the service leaves the socket units
-# alive, and socket activation will silently revive the service the moment
-# any DNS traffic appears.
-RESOLVED_UNITS=(
-    systemd-resolved-varlink.socket
-    systemd-resolved-monitor.socket
-    systemd-resolved.service
-)
+# Populated by require_init() based on the detected init system.
+# For systemd: socket units must be masked alongside the service to prevent
+# socket activation from silently reviving systemd-resolved.
+RESOLVED_UNITS=()
 
 # ── Init system abstraction ───────────────────────────────────────────────────
 # Thin wrappers around init-system-specific commands.
-# Currently implements the systemd backend. Adding a new init system means
-# replacing the bodies of these functions (and resolver unit names above).
+# Each function dispatches on $INIT so adding a new init system means
+# adding a case branch here and in RESOLVED_UNITS population below.
 
-service_tor_start()    { systemctl start tor; }
-service_tor_stop()     { systemctl stop tor; }
-service_tor_restart()  { systemctl restart tor; }
-service_tor_running()  { systemctl is-active --quiet tor; }
-service_tor_reload()   { systemctl kill --signal=SIGHUP tor; }
-service_tor_log()      { journalctl -u tor "$@"; }
+INIT=""
 
-resolver_running()     { systemctl is-active --quiet systemd-resolved.service; }
-resolver_start()       { systemctl start systemd-resolved.service; }
-resolver_mask_now()    { systemctl mask --now "$1"; }
-resolver_unmask()      { systemctl unmask "$1"; }
-resolver_is_active()   { systemctl is-active --quiet "$1" 2>/dev/null; }
+service_tor_start() {
+    case "$INIT" in
+        systemd) systemctl start tor ;;
+        *)       die_unsupported ;;
+    esac
+}
+service_tor_stop() {
+    case "$INIT" in
+        systemd) systemctl stop tor ;;
+        *)       die_unsupported ;;
+    esac
+}
+service_tor_restart() {
+    case "$INIT" in
+        systemd) systemctl restart tor ;;
+        *)       die_unsupported ;;
+    esac
+}
+service_tor_running() {
+    case "$INIT" in
+        systemd) systemctl is-active --quiet tor ;;
+        *)       die_unsupported ;;
+    esac
+}
+service_tor_reload() {
+    case "$INIT" in
+        systemd) systemctl kill --signal=SIGHUP tor ;;
+        *)       die_unsupported ;;
+    esac
+}
+service_tor_log() {
+    case "$INIT" in
+        systemd) journalctl -u tor "$@" ;;
+        *)       die_unsupported ;;
+    esac
+}
+
+resolver_running() {
+    case "$INIT" in
+        systemd) systemctl is-active --quiet systemd-resolved.service ;;
+        *)       return 1 ;;
+    esac
+}
+resolver_start() {
+    case "$INIT" in
+        systemd) systemctl start systemd-resolved.service ;;
+        *)       die_unsupported ;;
+    esac
+}
+resolver_mask_now() {
+    case "$INIT" in
+        systemd) systemctl mask --now "$1" ;;
+        *)       die_unsupported ;;
+    esac
+}
+resolver_unmask() {
+    case "$INIT" in
+        systemd) systemctl unmask "$1" ;;
+        *)       die_unsupported ;;
+    esac
+}
+resolver_is_active() {
+    case "$INIT" in
+        systemd) systemctl is-active --quiet "$1" 2>/dev/null ;;
+        *)       return 1 ;;
+    esac
+}
+
+die_unsupported() {
+    echo -e "${RED}[✗] Init system '${INIT}' does not support this operation.${RESET}"; exit 1
+}
 
 detect_init() {
     local pid1
@@ -89,16 +145,25 @@ detect_init() {
 }
 
 require_init() {
-    local init
-    init=$(detect_init) || {
+    INIT=$(detect_init) || {
         echo -e "${RED}[✗] Could not detect init system.${RESET}"; exit 1
     }
-    if [[ "$init" != "systemd" ]]; then
-        echo -e "${RED}[✗] Init system '${init}' is not yet supported.${RESET}"
-        echo -e "    Only systemd is supported at the moment."
-        echo -e "    Check the TO-DO list for planned init system support."
-        exit 1
-    fi
+
+    # Populate RESOLVED_UNITS for the current init system.
+    case "$INIT" in
+        systemd)
+            RESOLVED_UNITS=(
+                systemd-resolved-varlink.socket
+                systemd-resolved-monitor.socket
+                systemd-resolved.service
+            ) ;;
+        openrc|runit|sysvinit)
+            RESOLVED_UNITS=()
+            echo -e "${RED}[✗] Init system '${INIT}' is not yet supported.${RESET}"
+            echo -e "    Only systemd is supported at the moment."
+            echo -e "    Check the TO-DO list for planned init system support."
+            exit 1 ;;
+    esac
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
