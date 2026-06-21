@@ -281,12 +281,12 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 ## TO-DO
 
-- [ ] Support init systems other than systemd
+- [ ] Support init systems other than Systemd:
   - [ ] OpenRC
   - [ ] Runit
   - [ ] SysVinit
 - [ ] Config file — move hardcoded vars (ports, state paths) to `/etc/tor-route.conf`
-- [ ] nftables backend — support the modern iptables replacement
+- [ ] `nftables` backend — support the modern `iptables` replacement
 - [ ] Tor bridges support — bypass censorship in restrictive networks
 - [ ] Split-tunneling — exclude specific users or processes from Tor routing
 - [ ] Kill switch — block all traffic if Tor drops unexpectedly
