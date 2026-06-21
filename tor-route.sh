@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  tor-route.sh — Route all system traffic through Tor on Arch Linux
-#  v6 — adds exit node country selection for start and newnode
+#  tor-route.sh - Route all system traffic through Tor on Arch Linux
+#  v1.1.0 - adds exit node country selection for start and newnode
 #
 #  Usage (must be run as root):
 #    sudo tor-route start [CC]    → Enable Tor routing
@@ -37,9 +37,9 @@ RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 COUNTRY_FILE="/tmp/tor-route-country"
 
 # All systemd units that together make up systemd-resolved.
-# We must mask ALL of them — masking only the service leaves the socket units
+# We must mask ALL of them - masking only the service leaves the socket units
 # alive, and socket activation will silently revive the service the moment
-# any DNS traffic appears (which is what caused the v4 leak).
+# any DNS traffic appears.
 RESOLVED_UNITS=(
     systemd-resolved-varlink.socket
     systemd-resolved-monitor.socket
@@ -149,7 +149,7 @@ configure_torrc() {
 
     if [[ -n "$country" ]]; then
         # ExitNodes {cc} tells Tor to only use exit nodes in that country.
-        # StrictNodes 1 makes the restriction hard — Tor will not fall back
+        # StrictNodes 1 makes the restriction hard - Tor will not fall back
         # to other countries if no exit is available (it will wait instead).
         cat >> "$TORRC" <<EOF
 
@@ -200,10 +200,10 @@ fix_dns_start() {
     # restore the service if it was running before we started.
     if systemctl is-active --quiet systemd-resolved.service; then
         echo "yes" > "$RESOLVED_STATE_FILE"
-        echo -e "${YELLOW}[i] systemd-resolved was running — will restore it on stop.${RESET}"
+        echo -e "${YELLOW}[i] systemd-resolved was running - will restore it on stop.${RESET}"
     else
         echo "no" > "$RESOLVED_STATE_FILE"
-        echo -e "${YELLOW}[i] systemd-resolved was NOT running — will leave it stopped on stop.${RESET}"
+        echo -e "${YELLOW}[i] systemd-resolved was NOT running - will leave it stopped on stop.${RESET}"
     fi
 
     # Back up resolv.conf before touching it
@@ -216,13 +216,13 @@ fix_dns_start() {
     # all the time, it keeps a lightweight socket open. The moment any process
     # sends traffic to that socket, systemd automatically starts the full
     # service. If we only mask systemd-resolved.service but leave the sockets
-    # alive, any DNS query will silently bring systemd-resolved back to life —
-    # which is exactly what was happening in v4.
+    # alive, any DNS query will silently bring systemd-resolved back to life -
+    # which is exactly what was happening in a previous version of this script.
     echo -e "${YELLOW}[i] Masking all systemd-resolved units (service + sockets)...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
         systemctl mask --now "$unit" 2>/dev/null && \
             echo -e "    Masked: ${unit}" || \
-            echo -e "    ${YELLOW}(skipped — not found: ${unit})${RESET}"
+            echo -e "    ${YELLOW}(skipped - not found: ${unit})${RESET}"
     done
 
     # Write a plain resolv.conf pointing to 127.0.0.1.
@@ -248,9 +248,9 @@ fix_dns_stop() {
         rm -f "$RESOLV_BACKUP"
         echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
     else
-        # No backup — recreate the standard symlink used by Arch + systemd
+        # No backup - recreate the standard symlink used by Arch + systemd
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
-        echo -e "${YELLOW}[i] No resolv.conf backup found — recreated default symlink.${RESET}"
+        echo -e "${YELLOW}[i] No resolv.conf backup found - recreated default symlink.${RESET}"
     fi
 
     # Only start systemd-resolved if it was active before we ran `start`.
@@ -263,7 +263,7 @@ fix_dns_stop() {
         systemctl start systemd-resolved.service
         echo -e "${GREEN}[✓] systemd-resolved restored (it was running before).${RESET}"
     else
-        echo -e "${YELLOW}[i] systemd-resolved was not running before — leaving it stopped.${RESET}"
+        echo -e "${YELLOW}[i] systemd-resolved was not running before - leaving it stopped.${RESET}"
     fi
 }
 
@@ -300,7 +300,7 @@ restore_iptables() {
     else
         iptables  -F; iptables  -t nat -F
         ip6tables -F; ip6tables -t nat -F
-        echo -e "${YELLOW}[i] No backup found — rules flushed.${RESET}"
+        echo -e "${YELLOW}[i] No backup found - rules flushed.${RESET}"
     fi
 }
 
@@ -361,7 +361,7 @@ show_ip() {
         echo -e "    IPv4: ${BOLD}${ip}${RESET}"
         # Geo-IP lookup: query ip-api.com for country info about the current IP.
         # This tells you which country the exit node appears to be in.
-        # We use the free JSON endpoint — no API key required.
+        # We use the free JSON endpoint - no API key required.
         local geo
         geo=$(curl -s --max-time 8 "http://ip-api.com/json/${ip}?fields=country,countryCode,isp" 2>/dev/null)
         if [[ -n "$geo" ]]; then
@@ -433,8 +433,8 @@ cmd_start() {
     echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
     echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
     show_ip
-    echo -e "\n    ${BOLD}sudo $0 newnode [CC]${RESET}  — new exit node / new IP"
-    echo -e "    ${BOLD}sudo $0 stop${RESET}          — restore normal internet\n"
+    echo -e "\n    ${BOLD}sudo $0 newnode [CC]${RESET}  - new exit node / new IP"
+    echo -e "    ${BOLD}sudo $0 stop${RESET}          - restore normal internet\n"
 }
 
 cmd_stop() {
@@ -468,7 +468,7 @@ cmd_status() {
 
     iptables -L OUTPUT 2>/dev/null | grep -q "udp.*DROP\|DROP.*udp" \
         && echo -e "  UDP / WebRTC:      ${GREEN}${BOLD}Blocked ✓${RESET}" \
-        || echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked — leak possible!${RESET}"
+        || echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
 
     ip6tables -L OUTPUT 2>/dev/null | grep -q "DROP\|policy DROP" \
         && echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" \
@@ -479,7 +479,7 @@ cmd_status() {
     for unit in "${RESOLVED_UNITS[@]}"; do
         if systemctl is-active --quiet "$unit" 2>/dev/null; then
             resolved_ok=false
-            echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE — may leak!${RESET}"
+            echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE - may leak!${RESET}"
         fi
     done
     $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
