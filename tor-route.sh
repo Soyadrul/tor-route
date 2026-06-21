@@ -49,7 +49,7 @@ RESOLVED_UNITS=(
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════════╗"
-    echo -e "║        Tor Traffic Router  v1.1.0        ║"
+    echo -e "║        Tor Traffic Router  v1.1.1        ║"
     echo -e "╚══════════════════════════════════════════╝${RESET}\n"
 }
 
