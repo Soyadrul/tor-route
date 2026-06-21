@@ -4,13 +4,13 @@
 #  v6 — adds exit node country selection for start and newnode
 #
 #  Usage (must be run as root):
-#    sudo bash tor-route.sh start [CC]    → Enable Tor routing
+#    sudo tor-route start [CC]    → Enable Tor routing
 #                                            CC = optional 2-letter country code
 #                                            e.g. start us  / start de  / start jp
-#    sudo bash tor-route.sh stop          → Disable Tor routing (back to normal)
-#    sudo bash tor-route.sh status        → Show routing state and exit node info
-#    sudo bash tor-route.sh newnode [CC]  → Switch exit node, optionally pin country
-#    sudo bash tor-route.sh countries     → List all supported country codes
+#    sudo tor-route stop          → Disable Tor routing (back to normal)
+#    sudo tor-route status        → Show routing state and exit node info
+#    sudo tor-route newnode [CC]  → Switch exit node, optionally pin country
+#    sudo tor-route countries     → List all supported country codes
 # =============================================================================
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -55,7 +55,7 @@ banner() {
 
 require_root() {
     if [[ $EUID -ne 0 ]]; then
-        echo -e "${RED}[✗] Must be run as root.  Try: ${BOLD}sudo bash $0 $1${RESET}"; exit 1
+        echo -e "${RED}[✗] Must be run as root.  Try: ${BOLD}sudo $0 $1${RESET}"; exit 1
     fi
 }
 
@@ -128,10 +128,10 @@ cmd_countries() {
         (( i % 12 == 0 )) && echo ""
     done
     echo -e "\n\n  ${YELLOW}Usage examples:${RESET}"
-    echo -e "    sudo bash $0 start us      → pin exit to United States"
-    echo -e "    sudo bash $0 start de      → pin exit to Germany"
-    echo -e "    sudo bash $0 newnode jp    → switch to a Japanese exit node"
-    echo -e "    sudo bash $0 start         → random exit (no country filter)\n"
+    echo -e "    sudo $0 start us      → pin exit to United States"
+    echo -e "    sudo $0 start de      → pin exit to Germany"
+    echo -e "    sudo $0 newnode jp    → switch to a Japanese exit node"
+    echo -e "    sudo $0 start         → random exit (no country filter)\n"
 }
 
 
@@ -396,7 +396,7 @@ cmd_start() {
     if [[ -n "${2:-}" ]]; then
         country=$(validate_country "$2") || {
             echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
-            echo -e "    Run  ${BOLD}sudo bash $0 countries${RESET}  to see all valid codes."
+            echo -e "    Run  ${BOLD}sudo $0 countries${RESET}  to see all valid codes."
             exit 1
         }
         echo -e "${CYAN}[→] Starting Tor routing with exit node in: ${BOLD}${country^^}${RESET}\n"
@@ -433,8 +433,8 @@ cmd_start() {
     echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
     echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
     show_ip
-    echo -e "\n    ${BOLD}sudo bash $0 newnode [CC]${RESET}  — new exit node / new IP"
-    echo -e "    ${BOLD}sudo bash $0 stop${RESET}          — restore normal internet\n"
+    echo -e "\n    ${BOLD}sudo $0 newnode [CC]${RESET}  — new exit node / new IP"
+    echo -e "    ${BOLD}sudo $0 stop${RESET}          — restore normal internet\n"
 }
 
 cmd_stop() {
@@ -509,7 +509,7 @@ cmd_newnode() {
     require_root newnode
 
     if ! systemctl is-active --quiet tor; then
-        echo -e "${RED}[✗] Tor is not running. Run: sudo bash $0 start${RESET}"; exit 1
+        echo -e "${RED}[✗] Tor is not running. Run: sudo $0 start${RESET}"; exit 1
     fi
 
     # Parse optional country code argument
@@ -517,7 +517,7 @@ cmd_newnode() {
     if [[ -n "${2:-}" ]]; then
         country=$(validate_country "$2") || {
             echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
-            echo -e "    Run  ${BOLD}sudo bash $0 countries${RESET}  to see all valid codes."
+            echo -e "    Run  ${BOLD}sudo $0 countries${RESET}  to see all valid codes."
             exit 1
         }
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
@@ -558,7 +558,7 @@ case "$1" in
     countries) cmd_countries     ;;
     *)
         banner
-        echo -e "  ${BOLD}Usage:${RESET}  sudo bash $0 {start|stop|status|newnode|countries}\n"
+        echo -e "  ${BOLD}Usage:${RESET}  sudo $0 {start|stop|status|newnode|countries}\n"
         echo -e "  ${GREEN}start [CC]${RESET}    Route all traffic through Tor"
         echo -e "               CC = optional 2-letter country code for exit node"
         echo -e "               e.g.  start us  /  start de  /  start jp"
