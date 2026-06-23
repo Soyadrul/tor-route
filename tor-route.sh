@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  tor-route.sh - Route all system traffic through Tor on Arch Linux
-#  v1.1.0 - adds exit node country selection for start and newnode
+#  tor-route.sh - Route all system traffic through Tor
+#  v1.1.1 - init system abstraction with systemd, openrc, runit, sysvinit
 #
 #  Usage (must be run as root):
 #    sudo tor-route start [CC]    → Enable Tor routing
@@ -28,8 +28,9 @@ IPTABLES_BACKUP="/tmp/iptables-pre-tor.rules"
 IP6TABLES_BACKUP="/tmp/ip6tables-pre-tor.rules"
 RESOLV_BACKUP="/tmp/resolv.conf.pre-tor"
 
-# This file records whether systemd-resolved was active BEFORE we touched it.
-# `stop` reads it so it only restores the service if it was running originally.
+# Records whether a DNS resolver was active before `start` touched it.
+# `stop` reads this so it only restores the resolver if it was running originally.
+# On systemd this tracks systemd-resolved; on other inits it always records "no".
 RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 
 # Persists the active country code (or "random") so `status` and `newnode`
@@ -41,7 +42,7 @@ COUNTRY_FILE="/tmp/tor-route-country"
 # socket activation from silently reviving systemd-resolved.
 RESOLVED_UNITS=()
 
-# Path to Tor's log file (non-systemd only; systemd uses journalctl).
+# Path to Tor's log file for non-systemd inits (systemd uses journalctl instead).
 TOR_LOG_FILE=""
 
 # ── Init system abstraction ───────────────────────────────────────────────────
@@ -214,7 +215,7 @@ check_dependencies() {
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
         echo -e "${RED}[✗] Missing: ${missing[*]}${RESET}"
-        echo -e "    Install: ${BOLD}sudo pacman -S tor iptables curl iproute2${RESET}"; exit 1
+        echo -e "    Install the missing packages using your distro's package manager.${RESET}"; exit 1
     fi
     if [[ -z "$TOR_UID" ]]; then
         echo -e "${RED}[✗] 'tor' system user not found. Is tor installed?${RESET}"; exit 1
@@ -339,34 +340,30 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
-# ── DNS: stop and mask systemd-resolved AND its socket units ─────────────────
+# ── DNS resolver handling ─────────────────────────────────────────────────────
 fix_dns_start() {
-    # --- Record original state BEFORE we touch anything ---
-    #
-    # We check whether systemd-resolved.service is currently active and save
-    # "yes" or "no" to a temp file. `stop` will read this file and only
-    # restore the service if it was running before we started.
+    # Record whether a DNS resolver was running before we touch anything.
+    # On systemd this checks systemd-resolved; on other inits it's always "no".
     if resolver_running; then
         echo "yes" > "$RESOLVED_STATE_FILE"
-        echo -e "${YELLOW}[i] systemd-resolved was running - will restore it on stop.${RESET}"
+        echo -e "${YELLOW}[i] DNS resolver was running - will restore it on stop.${RESET}"
     else
         echo "no" > "$RESOLVED_STATE_FILE"
-        echo -e "${YELLOW}[i] systemd-resolved was NOT running - will leave it stopped on stop.${RESET}"
+        echo -e "${YELLOW}[i] DNS resolver was NOT running - will leave it stopped on stop.${RESET}"
     fi
 
     # Back up resolv.conf before touching it
     cp --dereference /etc/resolv.conf "$RESOLV_BACKUP" 2>/dev/null
 
-    # Mask and stop ALL related units.
+    # Mask and stop all resolver units (systemd only; other inits skip this).
     #
     # Why mask the socket units too?
     # systemd uses "socket activation": instead of keeping a service running
     # all the time, it keeps a lightweight socket open. The moment any process
     # sends traffic to that socket, systemd automatically starts the full
     # service. If we only mask systemd-resolved.service but leave the sockets
-    # alive, any DNS query will silently bring systemd-resolved back to life -
-    # which is exactly what was happening in a previous version of this script.
-    echo -e "${YELLOW}[i] Masking all systemd-resolved units (service + sockets)...${RESET}"
+    # alive, any DNS query will silently bring systemd-resolved back to life.
+    echo -e "${YELLOW}[i] Masking DNS resolver units (systemd only)...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
         resolver_mask_now "$unit" 2>/dev/null && \
             echo -e "    Masked: ${unit}" || \
@@ -382,8 +379,8 @@ fix_dns_start() {
 }
 
 fix_dns_stop() {
-    # Unmask and re-enable all units we masked
-    echo -e "${YELLOW}[i] Unmasking systemd-resolved units...${RESET}"
+    # Unmask resolver units (systemd only; other inits skip this)
+    echo -e "${YELLOW}[i] Unmasking DNS resolver units (systemd only)...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
         resolver_unmask "$unit" 2>/dev/null && \
             echo -e "    Unmasked: ${unit}" || \
@@ -405,17 +402,16 @@ fix_dns_stop() {
         fi
     fi
 
-    # Only start systemd-resolved if it was active before we ran `start`.
-    # This avoids leaving the user's system in a different state than it was.
+    # Restart the DNS resolver only if it was running before `start`.
     local was_running
     was_running=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
     rm -f "$RESOLVED_STATE_FILE"
 
     if [[ "$was_running" == "yes" ]]; then
         resolver_start
-        echo -e "${GREEN}[✓] systemd-resolved restored (it was running before).${RESET}"
+        echo -e "${GREEN}[✓] DNS resolver restored (it was running before).${RESET}"
     else
-        echo -e "${YELLOW}[i] systemd-resolved was not running before - leaving it stopped.${RESET}"
+        echo -e "${YELLOW}[i] DNS resolver was not running before - leaving it stopped.${RESET}"
     fi
 }
 
@@ -431,7 +427,7 @@ verify_tor_ports() {
         || { echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${RED}NOT listening ✗${RESET}"; ok=0; }
     [[ $ok -eq 0 ]] && {
         echo -e "\n${RED}[✗] Tor is not listening on required ports.${RESET}"
-        echo -e "    Check: ${BOLD}journalctl -u tor -n 50${RESET}"
+        echo -e "    Check Tor logs for errors (e.g. ${BOLD}sudo journalctl -u tor -n 50${RESET} on systemd)."
         return 1
     }
     return 0
@@ -569,7 +565,7 @@ cmd_start() {
     echo ""
 
     if ! service_tor_running; then
-        echo -e "${RED}[✗] Tor failed to start. Run: journalctl -u tor -n 50${RESET}"
+        echo -e "${RED}[✗] Tor failed to start. Check Tor logs for errors (e.g. journalctl -u tor -n 50 on systemd).${RESET}"
         fix_dns_stop; cleanup_torrc; exit 1
     fi
     echo -e "${GREEN}[✓] Tor is running.${RESET}\n"
