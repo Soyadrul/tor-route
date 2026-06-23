@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  tor-route.sh - Route all system traffic through Tor
-#  v1.1.1 - init system abstraction with systemd, openrc, runit, sysvinit
+#  Init system abstraction with systemd, openrc, runit, sysvinit
 #
 #  Usage (must be run as root):
 #    sudo tor-route start [CC]    → Enable Tor routing
