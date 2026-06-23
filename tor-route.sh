@@ -41,6 +41,9 @@ COUNTRY_FILE="/tmp/tor-route-country"
 # socket activation from silently reviving systemd-resolved.
 RESOLVED_UNITS=()
 
+# Path to Tor's log file (non-systemd only; systemd uses journalctl).
+TOR_LOG_FILE=""
+
 # ── Init system abstraction ───────────────────────────────────────────────────
 # Thin wrappers around init-system-specific commands.
 # Each function dispatches on $INIT so adding a new init system means
@@ -50,74 +53,80 @@ INIT=""
 
 service_tor_start() {
     case "$INIT" in
-        systemd) systemctl start tor ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl start tor ;;
+        openrc)   rc-service tor start ;;
+        *)        die_unsupported ;;
     esac
 }
 service_tor_stop() {
     case "$INIT" in
-        systemd) systemctl stop tor ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl stop tor ;;
+        openrc)   rc-service tor stop ;;
+        *)        die_unsupported ;;
     esac
 }
 service_tor_restart() {
     case "$INIT" in
-        systemd) systemctl restart tor ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl restart tor ;;
+        openrc)   rc-service tor restart ;;
+        *)        die_unsupported ;;
     esac
 }
 service_tor_running() {
     case "$INIT" in
-        systemd) systemctl is-active --quiet tor ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl is-active --quiet tor ;;
+        openrc)   rc-service tor status &>/dev/null ;;
+        *)        die_unsupported ;;
     esac
 }
 service_tor_reload() {
     case "$INIT" in
-        systemd) systemctl kill --signal=SIGHUP tor ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl kill --signal=SIGHUP tor ;;
+        openrc)   rc-service tor reload ;;
+        *)        die_unsupported ;;
     esac
 }
 service_tor_log() {
     case "$INIT" in
-        systemd) journalctl -u tor "$@" ;;
-        *)       die_unsupported ;;
+        systemd)  journalctl -u tor "$@" ;;
+        openrc)   tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
+        *)        die_unsupported ;;
     esac
 }
 
 resolver_running() {
     case "$INIT" in
-        systemd) systemctl is-active --quiet systemd-resolved.service ;;
-        *)       return 1 ;;
+        systemd)  systemctl is-active --quiet systemd-resolved.service ;;
+        *)        return 1 ;;
     esac
 }
 resolver_start() {
     case "$INIT" in
-        systemd) systemctl start systemd-resolved.service ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl start systemd-resolved.service ;;
+        *)        return 0 ;;
     esac
 }
 resolver_mask_now() {
     case "$INIT" in
-        systemd) systemctl mask --now "$1" ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl mask --now "$1" ;;
+        *)        return 0 ;;
     esac
 }
 resolver_unmask() {
     case "$INIT" in
-        systemd) systemctl unmask "$1" ;;
-        *)       die_unsupported ;;
+        systemd)  systemctl unmask "$1" ;;
+        *)        return 0 ;;
     esac
 }
 resolver_is_active() {
     case "$INIT" in
-        systemd) systemctl is-active --quiet "$1" 2>/dev/null ;;
-        *)       return 1 ;;
+        systemd)  systemctl is-active --quiet "$1" 2>/dev/null ;;
+        *)        return 1 ;;
     esac
 }
 
 die_unsupported() {
-    echo -e "${RED}[✗] Init system '${INIT}' does not support this operation.${RESET}"; exit 1
+    echo -e "${RED}[✗] Init system '${INIT}' is not supported for this operation.${RESET}"; exit 1
 }
 
 detect_init() {
@@ -156,12 +165,15 @@ require_init() {
                 systemd-resolved-varlink.socket
                 systemd-resolved-monitor.socket
                 systemd-resolved.service
-            ) ;;
-        openrc|runit|sysvinit)
+            )
+            TOR_LOG_FILE="" ;;
+        openrc)
+            RESOLVED_UNITS=()
+            TOR_LOG_FILE="/var/log/tor/log" ;;
+        runit|sysvinit)
             RESOLVED_UNITS=()
             echo -e "${RED}[✗] Init system '${INIT}' is not yet supported.${RESET}"
-            echo -e "    Only systemd is supported at the moment."
-            echo -e "    Check the TO-DO list for planned init system support."
+            echo -e "    Only systemd and openrc are supported at the moment."
             exit 1 ;;
     esac
 }
@@ -368,9 +380,13 @@ fix_dns_stop() {
         rm -f "$RESOLV_BACKUP"
         echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
     else
-        # No backup - recreate the standard symlink used by Arch + systemd
-        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf 2>/dev/null || true
-        echo -e "${YELLOW}[i] No resolv.conf backup found - recreated default symlink.${RESET}"
+        if [[ -f /run/systemd/resolve/stub-resolv.conf ]]; then
+            ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+            echo -e "${YELLOW}[i] No resolv.conf backup found - recreated default symlink.${RESET}"
+        else
+            echo "nameserver 1.1.1.1" > /etc/resolv.conf
+            echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
+        fi
     fi
 
     # Only start systemd-resolved if it was active before we ran `start`.
@@ -596,15 +612,19 @@ cmd_status() {
         && echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" \
         || echo -e "  IPv6:              ${YELLOW}Not blocked${RESET}"
 
-    # Check the service AND its socket units
-    local resolved_ok=true
-    for unit in "${RESOLVED_UNITS[@]}"; do
-        if resolver_is_active "$unit"; then
-            resolved_ok=false
-            echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE - may leak!${RESET}"
-        fi
-    done
-    $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
+    # Check the DNS resolver state
+    if [[ "$INIT" == "systemd" ]]; then
+        local resolved_ok=true
+        for unit in "${RESOLVED_UNITS[@]}"; do
+            if resolver_is_active "$unit"; then
+                resolved_ok=false
+                echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE - may leak!${RESET}"
+            fi
+        done
+        $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
+    else
+        echo -e "  DNS:               ${GREEN}${BOLD}/etc/resolv.conf → Tor ✓${RESET}"
+    fi
 
     # Show configured exit node country from state file
     if [[ -f "$COUNTRY_FILE" ]]; then
