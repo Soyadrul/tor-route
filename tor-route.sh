@@ -55,6 +55,7 @@ service_tor_start() {
     case "$INIT" in
         systemd)  systemctl start tor ;;
         openrc)   rc-service tor start ;;
+        runit)    sv start tor ;;
         *)        die_unsupported ;;
     esac
 }
@@ -62,6 +63,7 @@ service_tor_stop() {
     case "$INIT" in
         systemd)  systemctl stop tor ;;
         openrc)   rc-service tor stop ;;
+        runit)    sv stop tor ;;
         *)        die_unsupported ;;
     esac
 }
@@ -69,6 +71,7 @@ service_tor_restart() {
     case "$INIT" in
         systemd)  systemctl restart tor ;;
         openrc)   rc-service tor restart ;;
+        runit)    sv restart tor ;;
         *)        die_unsupported ;;
     esac
 }
@@ -76,6 +79,7 @@ service_tor_running() {
     case "$INIT" in
         systemd)  systemctl is-active --quiet tor ;;
         openrc)   rc-service tor status &>/dev/null ;;
+        runit)    sv status tor &>/dev/null ;;
         *)        die_unsupported ;;
     esac
 }
@@ -83,6 +87,7 @@ service_tor_reload() {
     case "$INIT" in
         systemd)  systemctl kill --signal=SIGHUP tor ;;
         openrc)   rc-service tor reload ;;
+        runit)    sv reload tor ;;
         *)        die_unsupported ;;
     esac
 }
@@ -90,6 +95,7 @@ service_tor_log() {
     case "$INIT" in
         systemd)  journalctl -u tor "$@" ;;
         openrc)   tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
+        runit)    tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
         *)        die_unsupported ;;
     esac
 }
@@ -170,10 +176,13 @@ require_init() {
         openrc)
             RESOLVED_UNITS=()
             TOR_LOG_FILE="/var/log/tor/log" ;;
-        runit|sysvinit)
+        runit)
+            RESOLVED_UNITS=()
+            TOR_LOG_FILE="/var/log/tor/current" ;;
+        sysvinit)
             RESOLVED_UNITS=()
             echo -e "${RED}[✗] Init system '${INIT}' is not yet supported.${RESET}"
-            echo -e "    Only systemd and openrc are supported at the moment."
+            echo -e "    Only systemd, openrc and runit are supported at the moment."
             exit 1 ;;
     esac
 }
