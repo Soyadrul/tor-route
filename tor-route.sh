@@ -56,6 +56,7 @@ service_tor_start() {
         systemd)  systemctl start tor ;;
         openrc)   rc-service tor start ;;
         runit)    sv start tor ;;
+        sysvinit) /etc/init.d/tor start ;;
         *)        die_unsupported ;;
     esac
 }
@@ -64,6 +65,7 @@ service_tor_stop() {
         systemd)  systemctl stop tor ;;
         openrc)   rc-service tor stop ;;
         runit)    sv stop tor ;;
+        sysvinit) /etc/init.d/tor stop ;;
         *)        die_unsupported ;;
     esac
 }
@@ -72,6 +74,7 @@ service_tor_restart() {
         systemd)  systemctl restart tor ;;
         openrc)   rc-service tor restart ;;
         runit)    sv restart tor ;;
+        sysvinit) /etc/init.d/tor restart ;;
         *)        die_unsupported ;;
     esac
 }
@@ -80,6 +83,7 @@ service_tor_running() {
         systemd)  systemctl is-active --quiet tor ;;
         openrc)   rc-service tor status &>/dev/null ;;
         runit)    sv status tor &>/dev/null ;;
+        sysvinit) /etc/init.d/tor status &>/dev/null ;;
         *)        die_unsupported ;;
     esac
 }
@@ -88,13 +92,14 @@ service_tor_reload() {
         systemd)  systemctl kill --signal=SIGHUP tor ;;
         openrc)   rc-service tor reload ;;
         runit)    sv reload tor ;;
+        sysvinit) /etc/init.d/tor reload ;;
         *)        die_unsupported ;;
     esac
 }
 service_tor_log() {
     case "$INIT" in
         systemd)  journalctl -u tor "$@" ;;
-        openrc)   tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
+        openrc|sysvinit) tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
         runit)    tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
         *)        die_unsupported ;;
     esac
@@ -181,8 +186,10 @@ require_init() {
             TOR_LOG_FILE="/var/log/tor/current" ;;
         sysvinit)
             RESOLVED_UNITS=()
-            echo -e "${RED}[✗] Init system '${INIT}' is not yet supported.${RESET}"
-            echo -e "    Only systemd, openrc and runit are supported at the moment."
+            TOR_LOG_FILE="/var/log/tor/log" ;;
+        *)
+            echo -e "${RED}[✗] Init system '${INIT}' is not supported.${RESET}"
+            echo -e "    Supported: systemd, openrc, runit, sysvinit"
             exit 1 ;;
     esac
 }
