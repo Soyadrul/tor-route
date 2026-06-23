@@ -1,9 +1,9 @@
 # tor-route
 
-A Bash script for Arch Linux that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node.
+A Bash script that transparently routes all system TCP traffic through the [Tor](https://www.torproject.org/) anonymity network, blocks DNS and WebRTC leaks, and provides a one-command way to switch your Tor exit node. Supports Systemd, OpenRC, Runit, and SysVinit init systems.
 
 > [!WARNING]
-> Tested only on [Arch Linux](https://archlinux.org/) but SHOULD work on any other distro.
+> Tested only on [Arch Linux](https://archlinux.org/) but SHOULD work on any other distro that has one of the following init systems: Systemd, OpenRC, Runit or SysVinit.
 
 ## Table of Contents:
 1.  [How it works](#how-it-works)
@@ -63,14 +63,10 @@ With tor-route:
 ## Requirements
 
 - **Root / sudo access**
-- The following Arch packages:
+- `tor`, `iptables`, `curl`, `ss` (from `iproute2` / `iproute`)
+- A supported init system: systemd, OpenRC, Runit, or SysVinit
 
-  ```bash
-  sudo pacman -S tor iptables curl iproute2
-  ```
-
-> `iproute2` provides the `ss` command used for port verification.  
-> `curl` is used to display your public IP before and after switching.
+> Install the packages with your distro's package manager (e.g. `sudo pacman -S tor iptables curl iproute2` on Arch).
 
 ---
 
@@ -144,9 +140,9 @@ sudo tor-route stop
 1. Validates the optional country code `CC` against the full ISO 3166-1 alpha-2 list.
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country.
 3. Saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
-4. Detects and records whether `systemd-resolved` was active, then **masks** the service and its socket units (`systemd-resolved.service`, `systemd-resolved-varlink.socket`, `systemd-resolved-monitor.socket`) to prevent them from restarting automatically via socket activation.
+4. Detects the init system and records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed.
 5. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener.
-6. Starts the Tor service and waits for it to bootstrap to 100%.
+6. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to bootstrap to 100%.
 7. Verifies that Tor is actually listening on both expected ports before touching the firewall.
 8. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
 
@@ -157,8 +153,8 @@ Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes along
 ### `stop`
 
 1. Restores the original `iptables` and `ip6tables` rules from backup.
-2. Unmasks all `systemd-resolved` units and restores `/etc/resolv.conf`.
-3. Only restarts `systemd-resolved` if it was running before `start` was called — the system is left exactly as it was found.
+2. Unmasks DNS resolver units (systemd only; other inits skip this) and restores `/etc/resolv.conf`.
+3. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 4. Stops the Tor service.
 5. Removes the settings added to `/etc/tor/torrc`.
 
@@ -169,7 +165,7 @@ Displays a live summary:
 - Whether TCP traffic is being routed through Tor
 - Whether UDP / WebRTC is blocked
 - Whether IPv6 is blocked
-- Whether `systemd-resolved` and its socket units are masked
+- Whether the DNS resolver is masked (systemd) or redirected via `/etc/resolv.conf` (other inits)
 - The **configured exit node country** (pinned code or `Random`)
 - Whether Tor is listening on the correct ports
 - Your current public IPv4, country, ISP, and IPv6 leak status
@@ -228,7 +224,14 @@ If either site reports that you are **not** using Tor after running `start`, run
 
 **Tor fails to start**
 ```bash
+# systemd
 journalctl -u tor -n 50
+
+# OpenRC / SysVinit
+tail -n 50 /var/log/tor/log
+
+# Runit
+tail -n 50 /var/log/tor/current
 ```
 Look for permission errors or port conflicts.
 
@@ -238,16 +241,26 @@ Run `status` and check every line:
 - `TCP routing: Through Tor ✓` — iptables rules are applied
 - `UDP / WebRTC: Blocked ✓` — non-DNS UDP is dropped
 - `IPv6: Blocked ✓` — no IPv6 leak
-- `DNS (resolved): All units masked ✓` — resolver cannot bypass Tor
+- `DNS (resolved): All units masked ✓` (systemd) or `DNS: /etc/resolv.conf → Tor ✓` (other inits) — resolver cannot bypass Tor
 - `DNSPort 5353: Listening ✓` — Tor's DNS is actually running
 
 If all lines show ✓ but the IP check website still shows your real IP, the website itself may be using WebRTC JavaScript — disable WebRTC in your browser as described above.
 
 **DNS not resolving after `stop`**
 
-`systemd-resolved` may need a moment to fully start. Wait a few seconds, or run:
+The DNS resolver may need a moment to fully start. Wait a few seconds, or run:
 ```bash
+# systemd
 sudo systemctl restart systemd-resolved
+
+# OpenRC
+sudo rc-service tor stop && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
+
+# Runit
+sudo sv stop tor && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
+
+# SysVinit
+sudo /etc/init.d/tor stop && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
 ```
 
 **`newnode` does not change the IP**
@@ -266,7 +279,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 | `/tmp/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
 | `/tmp/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
 | `/tmp/tor-route-country` | Records the active exit node country (or `random`) while Tor routing is active |
-| `/tmp/tor-route-resolved-state` | Records whether `systemd-resolved` was running before `start` |
+| `/tmp/tor-route-resolved-state` | Records whether a DNS resolver was running before `start` |
 
 ---
 
@@ -281,10 +294,10 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 ## TO-DO
 
-- [ ] Support init systems other than Systemd:
-  - [ ] OpenRC
-  - [ ] Runit
-  - [ ] SysVinit
+- [x] Support init systems other than Systemd:
+  - [x] OpenRC
+  - [x] Runit
+  - [x] SysVinit
 - [ ] Config file — move hardcoded vars (ports, state paths) to `/etc/tor-route.conf`
 - [ ] `nftables` backend — support the modern `iptables` replacement
 - [ ] Tor bridges support — bypass censorship in restrictive networks
