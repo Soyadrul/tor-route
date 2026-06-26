@@ -387,20 +387,20 @@ fix_dns_stop() {
             echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
     done
 
-    # Restore resolv.conf
-    if [[ -f "$RESOLV_BACKUP" ]]; then
+    # Restore resolv.conf.
+    # Prefer symlink to resolved's live stub (dynamic, updates with network changes)
+    # over a static backup file.
+    if [[ -f /run/systemd/resolve/stub-resolv.conf ]]; then
+        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+        echo -e "${YELLOW}[i] resolv.conf → symlink to stub-resolv.conf.${RESET}"
+    elif [[ -f "$RESOLV_BACKUP" ]]; then
         cp "$RESOLV_BACKUP" /etc/resolv.conf
-        rm -f "$RESOLV_BACKUP"
         echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
     else
-        if [[ -f /run/systemd/resolve/stub-resolv.conf ]]; then
-            ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-            echo -e "${YELLOW}[i] No resolv.conf backup found - recreated default symlink.${RESET}"
-        else
-            echo "nameserver 1.1.1.1" > /etc/resolv.conf
-            echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
-        fi
+        echo "nameserver 1.1.1.1" > /etc/resolv.conf
+        echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
     fi
+    rm -f "$RESOLV_BACKUP"
 
     # Restart the DNS resolver only if it was running before `start`.
     local was_running
@@ -441,26 +441,28 @@ save_iptables() {
 }
 
 restore_iptables() {
+    # Stage 1: always flush and reset policies — guarantees a working baseline
+    # regardless of backup state. Without this, ip6tables DROP policies set by
+    # apply_iptables persist after ip6tables -F (which only flushes rules).
+    iptables  -F; iptables  -t nat -F
+    ip6tables -F; ip6tables -t nat -F
+    ip6tables -P INPUT ACCEPT
+    ip6tables -P OUTPUT ACCEPT
+    ip6tables -P FORWARD ACCEPT
+    echo -e "${YELLOW}[i] Rules flushed, policies reset to ACCEPT.${RESET}"
+
+    # Stage 2: try to restore any custom pre-Tor rules from backup.
     if [[ -f "$IPTABLES_BACKUP" ]]; then
-        iptables-restore  < "$IPTABLES_BACKUP"  && rm -f "$IPTABLES_BACKUP" || {
-            echo -e "${YELLOW}[i] iptables-restore failed - flushing rules.${RESET}"
-            iptables -F; iptables -t nat -F
-        }
-        ip6tables-restore < "$IP6TABLES_BACKUP" && rm -f "$IP6TABLES_BACKUP" || {
-            echo -e "${YELLOW}[i] ip6tables-restore failed - flushing rules and resetting policies.${RESET}"
-            ip6tables -F; ip6tables -t nat -F
-            ip6tables -P INPUT ACCEPT
-            ip6tables -P OUTPUT ACCEPT
-            ip6tables -P FORWARD ACCEPT
-        }
-        echo -e "${GREEN}[✓] Firewall rules restored.${RESET}"
-    else
-        iptables  -F; iptables  -t nat -F
-        ip6tables -F; ip6tables -t nat -F
-        ip6tables -P INPUT ACCEPT
-        ip6tables -P OUTPUT ACCEPT
-        ip6tables -P FORWARD ACCEPT
-        echo -e "${YELLOW}[i] No backup found - rules flushed and policies reset.${RESET}"
+        iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null \
+            && rm -f "$IPTABLES_BACKUP" \
+            && echo -e "${YELLOW}[i] Custom iptables rules restored.${RESET}" \
+            || echo -e "${YELLOW}[i] No iptables backup to restore.${RESET}"
+    fi
+    if [[ -f "$IP6TABLES_BACKUP" ]]; then
+        ip6tables-restore < "$IP6TABLES_BACKUP" 2>/dev/null \
+            && rm -f "$IP6TABLES_BACKUP" \
+            && echo -e "${YELLOW}[i] Custom ip6tables rules restored.${RESET}" \
+            || echo -e "${YELLOW}[i] No ip6tables backup to restore.${RESET}"
     fi
 
     # Flush conntrack table to remove stale NAT entries that could still
