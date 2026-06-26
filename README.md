@@ -64,9 +64,10 @@ With tor-route:
 
 - **Root / sudo access**
 - `tor`, `iptables`, `curl`, `ss` (from `iproute2` / `iproute`)
+- `conntrack-tools` — optional, provides `conntrack` used to flush stale NAT entries on stop
 - A supported init system: systemd, OpenRC, Runit, or SysVinit
 
-> Install the packages with your distro's package manager (e.g. `sudo pacman -S tor iptables curl iproute2` on Arch).
+> Install the packages with your distro's package manager (e.g. `sudo pacman -S tor iptables curl iproute2 conntrack-tools` on Arch).  `conntrack-tools` is optional; the script works without it.
 
 ---
 
@@ -152,11 +153,12 @@ Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes along
 
 ### `stop`
 
-1. Restores the original `iptables` and `ip6tables` rules from backup.
-2. Unmasks DNS resolver units (systemd only; other inits skip this) and restores `/etc/resolv.conf`.
-3. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
-4. Stops the Tor service.
-5. Removes the settings added to `/etc/tor/torrc`.
+1. Flushes all iptables/ip6tables rules and resets ip6tables default policies to ACCEPT. Then tries to restore any custom pre-Tor rules from backup. This guarantees a working baseline regardless of backup integrity — the clean flush runs first, and the backup restore is a best-effort overlay.
+2. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
+3. Unmasks DNS resolver units (systemd only; other inits skip this). Restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`).
+4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
+5. Stops the Tor service.
+6. Removes the settings added to `/etc/tor/torrc`.
 
 ### `status`
 
@@ -248,20 +250,11 @@ If all lines show ✓ but the IP check website still shows your real IP, the web
 
 **DNS not resolving after `stop`**
 
-The DNS resolver may need a moment to fully start. Wait a few seconds, or run:
+The script now prefers a symlink to systemd-resolved's live stub-resolv.conf over a static backup. The DNS resolver may need a moment to fully start. Wait a few seconds, or run:
 ```bash
-# systemd
-sudo systemctl restart systemd-resolved
-
-# OpenRC
-sudo rc-service tor stop && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
-
-# Runit
-sudo sv stop tor && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
-
-# SysVinit
-sudo /etc/init.d/tor stop && sudo cp /tmp/resolv.conf.pre-tor /etc/resolv.conf
+sudo tor-route stop
 ```
+Run `stop` a second time — it will flush rules and reset policies, which reliably restores connectivity if the first run left something stale.
 
 **`newnode` does not change the IP**
 
