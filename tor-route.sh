@@ -442,14 +442,33 @@ save_iptables() {
 
 restore_iptables() {
     if [[ -f "$IPTABLES_BACKUP" ]]; then
-        iptables-restore  < "$IPTABLES_BACKUP"  && rm -f "$IPTABLES_BACKUP"
-        ip6tables-restore < "$IP6TABLES_BACKUP" && rm -f "$IP6TABLES_BACKUP"
+        iptables-restore  < "$IPTABLES_BACKUP"  && rm -f "$IPTABLES_BACKUP" || {
+            echo -e "${YELLOW}[i] iptables-restore failed - flushing rules.${RESET}"
+            iptables -F; iptables -t nat -F
+        }
+        ip6tables-restore < "$IP6TABLES_BACKUP" && rm -f "$IP6TABLES_BACKUP" || {
+            echo -e "${YELLOW}[i] ip6tables-restore failed - flushing rules and resetting policies.${RESET}"
+            ip6tables -F; ip6tables -t nat -F
+            ip6tables -P INPUT ACCEPT
+            ip6tables -P OUTPUT ACCEPT
+            ip6tables -P FORWARD ACCEPT
+        }
         echo -e "${GREEN}[✓] Firewall rules restored.${RESET}"
     else
         iptables  -F; iptables  -t nat -F
         ip6tables -F; ip6tables -t nat -F
-        echo -e "${YELLOW}[i] No backup found - rules flushed.${RESET}"
+        ip6tables -P INPUT ACCEPT
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -P FORWARD ACCEPT
+        echo -e "${YELLOW}[i] No backup found - rules flushed and policies reset.${RESET}"
     fi
+
+    # Flush conntrack table to remove stale NAT entries that could still
+    # redirect traffic to Tor's ports (now closed) after rule restoration.
+    echo -e "${YELLOW}[i] Flushing conntrack table (stale NAT entries)...${RESET}"
+    command -v conntrack &>/dev/null \
+        && conntrack -F 2>/dev/null \
+        || echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
 }
 
 apply_iptables() {
