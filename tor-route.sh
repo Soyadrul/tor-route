@@ -19,7 +19,11 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 # ── Configuration ─────────────────────────────────────────────────────────────
 TOR_TRANS_PORT=9040
 TOR_DNS_PORT=5353
-TOR_UID=$(id -u tor 2>/dev/null)
+TOR_USERS=(tor debian-tor toranon _tor)
+for _tu in "${TOR_USERS[@]}"; do
+    TOR_UID=$(id -u "$_tu" 2>/dev/null)
+    [[ -n "$TOR_UID" ]] && break
+done
 NON_TOR="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 TORRC="/etc/tor/torrc"
 
