@@ -55,6 +55,7 @@ TOR_LOG_FILE=""
 # adding a case branch here and in RESOLVED_UNITS population below.
 
 INIT=""
+SUPPORTED_INITS=(systemd openrc runit sysvinit)
 
 service_tor_start() {
     case "$INIT" in
@@ -194,7 +195,7 @@ require_init() {
             TOR_LOG_FILE="/var/log/tor/log" ;;
         *)
             echo -e "  Init system:      ${RED}${BOLD}${INIT}${RESET}"
-            echo -e "  ${RED}${BOLD}→${RESET} ${RED}Not supported. Supported: systemd, openrc, runit, sysvinit${RESET}"
+            echo -e "  ${RED}${BOLD}→${RESET} ${RED}Not supported. Supported: ${SUPPORTED_INITS[*]}${RESET}"
             exit 1 ;;
     esac
     echo -e "  Init system:      ${CYAN}${BOLD}${INIT}${RESET}\n"
