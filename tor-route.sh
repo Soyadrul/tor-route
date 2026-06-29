@@ -193,10 +193,11 @@ require_init() {
             RESOLVED_UNITS=()
             TOR_LOG_FILE="/var/log/tor/log" ;;
         *)
-            echo -e "${RED}[✗] Init system '${INIT}' is not supported.${RESET}"
-            echo -e "    Supported: systemd, openrc, runit, sysvinit"
+            echo -e "  Init system:      ${RED}${BOLD}${INIT}${RESET}"
+            echo -e "  ${RED}${BOLD}→${RESET} ${RED}Not supported. Supported: systemd, openrc, runit, sysvinit${RESET}"
             exit 1 ;;
     esac
+    echo -e "  Init system:      ${CYAN}${BOLD}${INIT}${RESET}\n"
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
