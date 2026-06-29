@@ -141,7 +141,7 @@ sudo tor-route stop
 1. Validates the optional country code `CC` against the full ISO 3166-1 alpha-2 list.
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country.
 3. Saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
-4. Detects the init system and records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed.
+4. Detects and displays the init system, then records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed.
 5. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener.
 6. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to bootstrap to 100%.
 7. Verifies that Tor is actually listening on both expected ports before touching the firewall.
@@ -153,16 +153,18 @@ Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes along
 
 ### `stop`
 
-1. Flushes all iptables/ip6tables rules and resets ip6tables default policies to ACCEPT. Then tries to restore any custom pre-Tor rules from backup. This guarantees a working baseline regardless of backup integrity — the clean flush runs first, and the backup restore is a best-effort overlay.
-2. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
-3. Unmasks DNS resolver units (systemd only; other inits skip this). Restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`).
-4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
-5. Stops the Tor service.
-6. Removes the settings added to `/etc/tor/torrc`.
+1. Detects and displays the init system.
+2. Flushes all iptables/ip6tables rules and resets ip6tables default policies to ACCEPT. Then tries to restore any custom pre-Tor rules from backup. This guarantees a working baseline regardless of backup integrity — the clean flush runs first, and the backup restore is a best-effort overlay.
+3. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
+4. Unmasks DNS resolver units (systemd only; other inits skip this). Restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`).
+5. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
+6. Stops the Tor service.
+7. Removes the settings added to `/etc/tor/torrc`.
 
 ### `status`
 
 Displays a live summary:
+- The **detected init system** (systemd, openrc, runit, or sysvinit)
 - Whether the Tor service is running
 - Whether TCP traffic is being routed through Tor
 - Whether UDP / WebRTC is blocked
@@ -174,7 +176,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Detects and displays the init system. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
