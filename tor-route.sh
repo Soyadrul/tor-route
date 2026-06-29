@@ -11,6 +11,7 @@
 #    sudo tor-route status        → Show routing state and exit node info
 #    sudo tor-route newnode [CC]  → Switch exit node, optionally pin country
 #    sudo tor-route countries     → List all supported country codes
+#    sudo tor-route check         → Thorough dry-run system check (safe to paste in GitHub issues)
 # =============================================================================
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -270,6 +271,156 @@ validate_country() {
         fi
     done
     return 1
+}
+
+cmd_check() {
+    banner
+    require_root check
+    require_init
+
+    local all_ok=0
+
+    # ── System ──────────────────────────────────────────────────────────────
+    echo -e "  ${BOLD}── System ──────────────────────────────${RESET}"
+    echo -e "  Script:    tor-route.sh v1.2.0"
+    if [[ -f /etc/os-release ]]; then
+        echo -e "  OS:        $(grep -oP '(?<=^PRETTY_NAME=").*(?=")' /etc/os-release 2>/dev/null || grep -oP '(?<=^PRETTY_NAME=).*' /etc/os-release 2>/dev/null | tr -d '"')"
+    fi
+    echo -e "  Kernel:    $(uname -rs 2>/dev/null)"
+    echo -e "  Init:      ${CYAN}${INIT}${RESET}"
+
+    # ── Dependencies ────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── Dependencies ─────────────────────────${RESET}"
+    local v
+    for cmd in tor iptables ip6tables curl ss; do
+        if command -v "$cmd" &>/dev/null; then
+            v=$("$cmd" --version 2>/dev/null | head -1)
+            echo -e "    ${GREEN}✓${RESET} ${cmd}  ${YELLOW}(${v:-version unknown})${RESET}"
+        else
+            echo -e "    ${RED}✗${RESET} ${cmd}  ${YELLOW}(missing)${RESET}"
+            all_ok=1
+        fi
+    done
+
+    # ── Tor user ────────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── Tor user ─────────────────────────────${RESET}"
+    echo -e "  Lookup:    ${TOR_USERS[*]}"
+    if [[ -n "$TOR_UID" ]]; then
+        echo -e "  Found:     UID ${TOR_UID}"
+    else
+        echo -e "  Found:     ${RED}none${RESET}"
+        all_ok=1
+    fi
+
+    # ── Tor service ────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── Tor service ──────────────────────────${RESET}"
+    if service_tor_running; then
+        echo -e "  Status:    ${GREEN}Running${RESET}"
+    else
+        echo -e "  Status:    ${YELLOW}Not running${RESET}"
+    fi
+    echo -e "  Ports:     $(ss -tlnp 2>/dev/null | grep tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
+    echo -e "  DNS port:  $(ss -ulnp 2>/dev/null | grep tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
+
+    # ── Torrc ───────────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── torrc ────────────────────────────────${RESET}"
+    if [[ -f "$TORRC" ]]; then
+        echo -e "  Path:      ${TORRC}"
+        echo -e "  Readable:  $([[ -r "$TORRC" ]] && echo "${GREEN}yes${RESET}" || echo "${RED}no${RESET}")"
+        echo -e "  Writable:  $([[ -w "$TORRC" ]] && echo "${GREEN}yes${RESET}" || echo "${RED}no${RESET}")"
+        if grep -q "^# --- tor-route.sh start" "$TORRC"; then
+            echo -e "  Our block: ${YELLOW}present${RESET}"
+            grep -A999 "^# --- tor-route.sh start" "$TORRC" | grep -B999 "^# --- tor-route.sh end"
+        else
+            echo -e "  Our block: not present"
+        fi
+    else
+        echo -e "  Path:      ${TORRC}"
+        echo -e "  Exists:    ${RED}no${RESET}"
+        all_ok=1
+    fi
+
+    # ── State files ─────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── State files ──────────────────────────${RESET}"
+    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE; do
+        local path="${!f}"
+        if [[ -f "$path" ]]; then
+            echo -e "  ${f}:  ${path}  ${GREEN}(exists)${RESET}"
+        else
+            echo -e "  ${f}:  ${path}  (not present)"
+        fi
+    done
+
+    # ── Firewall ────────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── Firewall ─────────────────────────────${RESET}"
+    echo -e "  iptables:  $(iptables --version 2>/dev/null || echo 'not found')"
+    if iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
+        echo -e "  NAT OUTPUT:"
+        iptables -t nat -L OUTPUT -n 2>/dev/null | sed 's/^/    /'
+        echo -e "  Filter OUTPUT:"
+        iptables -L OUTPUT -n -v 2>/dev/null | sed 's/^/    /'
+    else
+        echo -e "  NAT OUTPUT:  ${GREEN}(no Tor redirect — normal routing)${RESET}"
+    fi
+    if command -v ip6tables &>/dev/null; then
+        echo -e "  ip6tables: $(ip6tables --version 2>/dev/null || echo 'found')"
+        if ip6tables -L -n 2>/dev/null | grep -q "DROP\|policy DROP"; then
+            echo -e "  IPv6 policy:  ${GREEN}Blocked${RESET}"
+        else
+            echo -e "  IPv6 policy:  ${YELLOW}Not blocked${RESET}"
+        fi
+    else
+        echo -e "  ip6tables: ${YELLOW}not available${RESET}"
+    fi
+
+    # ── DNS ──────────────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── DNS ──────────────────────────────────${RESET}"
+    if [[ -L /etc/resolv.conf ]]; then
+        echo -e "  resolv.conf:  symlink → $(readlink /etc/resolv.conf)"
+    elif [[ -f /etc/resolv.conf ]]; then
+        echo -e "  resolv.conf:  regular file (${GREEN}$(wc -l < /etc/resolv.conf) lines${RESET})"
+    else
+        echo -e "  resolv.conf:  ${RED}missing${RESET}"
+    fi
+    local ns_count
+    ns_count=$(grep -c '^nameserver' /etc/resolv.conf 2>/dev/null || echo 0)
+    echo -e "  Nameservers:  ${ns_count} entries"
+    echo -e "  Backup:       $( [[ -f "$RESOLV_BACKUP" ]] && echo "${GREEN}exists${RESET}" || echo 'not present' )"
+    if [[ "$INIT" == "systemd" ]] && [[ -f "$RESOLVED_STATE_FILE" ]]; then
+        echo -e "  Resolved:     was $(cat "$RESOLVED_STATE_FILE")"
+    fi
+
+    # ── Tor log ─────────────────────────────────────────────────────────────
+    echo -e "\n  ${BOLD}── Tor log (last 5 lines) ───────────────${RESET}"
+    local loglines
+    if [[ "$INIT" == "systemd" ]]; then
+        loglines=$(journalctl -u tor -n 5 --no-pager 2>/dev/null)
+        if [[ -n "$loglines" ]]; then
+            echo "$loglines" | sed 's/^/  /'
+        else
+            echo -e "  ${YELLOW}(no Tor journal entries yet)${RESET}"
+        fi
+    elif [[ -f "$TOR_LOG_FILE" ]]; then
+        echo -e "  Log file:  ${TOR_LOG_FILE}"
+        loglines=$(tail -n 5 "$TOR_LOG_FILE" 2>/dev/null)
+        if [[ -n "$loglines" ]]; then
+            echo "$loglines" | sed 's/^/  /'
+        else
+            echo -e "  ${YELLOW}(empty log)${RESET}"
+        fi
+    else
+        echo -e "  Log file:  ${TOR_LOG_FILE:-'(not configured)'}"
+        echo -e "  ${YELLOW}(not found)${RESET}"
+    fi
+
+    # ── Verdict ─────────────────────────────────────────────────────────────
+    if [[ $all_ok -eq 0 ]]; then
+        echo -e "\n${GREEN}${BOLD}[✓] All checks passed.${RESET}"
+    else
+        echo -e "\n${YELLOW}${BOLD}[!] Some checks failed — review the items above.${RESET}"
+    fi
+    echo -e "\n${BOLD}Paste the full output above when opening a GitHub issue.${RESET}"
+    echo ""
 }
 
 cmd_countries() {
@@ -734,6 +885,7 @@ cmd_newnode() {
 #  ENTRY POINT
 # =============================================================================
 case "$1" in
+    check)     cmd_check         ;;
     start)     cmd_start     "$@" ;;
     stop)      cmd_stop          ;;
     status)    cmd_status        ;;
@@ -741,13 +893,14 @@ case "$1" in
     countries) cmd_countries     ;;
     *)
         banner
-        echo -e "  ${BOLD}Usage:${RESET}  sudo ${0##*/} {start|stop|status|newnode|countries}\n"
+        echo -e "  ${BOLD}Usage:${RESET}  sudo ${0##*/} {start|stop|status|newnode|countries|check}\n"
         echo -e "  ${GREEN}start [CC]${RESET}    Route all traffic through Tor"
         echo -e "               CC = optional 2-letter country code for exit node"
         echo -e "               e.g.  start us  /  start de  /  start jp"
         echo -e "  ${RED}stop${RESET}          Restore normal internet routing"
         echo -e "  ${CYAN}status${RESET}        Show routing status, exit node country and public IP"
         echo -e "  ${YELLOW}newnode [CC]${RESET}  Switch to a new exit node (optionally pin a country)"
-        echo -e "  ${CYAN}countries${RESET}     List all supported country codes\n"
+        echo -e "  ${CYAN}countries${RESET}     List all supported country codes"
+        echo -e "  ${YELLOW}check${RESET}        Run a dry-run system check for potential issues\n"
         exit 1 ;;
 esac
