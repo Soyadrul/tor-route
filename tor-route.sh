@@ -99,7 +99,7 @@ service_tor_reload() {
 }
 service_tor_log() {
     case "$INIT" in
-        systemd)  journalctl -u tor "$@" ;;
+        systemd)  journalctl -u tor -n 30 --no-pager "$@" ;;
         openrc|sysvinit) tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
         runit)    tail -n 30 "$TOR_LOG_FILE" 2>/dev/null ;;
         *)        die_unsupported ;;
@@ -427,7 +427,7 @@ verify_tor_ports() {
         || { echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${RED}NOT listening ✗${RESET}"; ok=0; }
     [[ $ok -eq 0 ]] && {
         echo -e "\n${RED}[✗] Tor is not listening on required ports.${RESET}"
-        echo -e "    Check Tor logs for errors (e.g. ${BOLD}sudo journalctl -u tor -n 50${RESET} on systemd)."
+        echo -e "    Check Tor logs for errors (${BOLD}sudo ${0##*/} status${RESET} to verify the service state)."
         return 1
     }
     return 0
@@ -559,6 +559,7 @@ cmd_start() {
     banner
     require_root start
     require_init
+    check_dependencies
 
     # Parse optional country code argument ($2 when called as `start CC`)
     local country=""
@@ -581,12 +582,12 @@ cmd_start() {
     echo -n "    Bootstrapping"
     for i in {1..25}; do
         sleep 1; echo -n "."
-        service_tor_log -n 30 --no-pager 2>/dev/null | grep -q "Bootstrapped 100%" && break
+        service_tor_log 2>/dev/null | grep -q "Bootstrapped 100%" && break
     done
     echo ""
 
     if ! service_tor_running; then
-        echo -e "${RED}[✗] Tor failed to start. Check Tor logs for errors (e.g. journalctl -u tor -n 50 on systemd).${RESET}"
+        echo -e "${RED}[✗] Tor failed to start. Check Tor logs for errors (${BOLD}sudo ${0##*/} status${RESET}).${RESET}"
         fix_dns_stop; cleanup_torrc; exit 1
     fi
     echo -e "${GREEN}[✓] Tor is running.${RESET}\n"
