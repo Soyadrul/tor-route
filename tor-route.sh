@@ -21,9 +21,13 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 TOR_TRANS_PORT=9040
 TOR_DNS_PORT=5353
 TOR_USERS=(tor debian-tor toranon _tor)
+TOR_USER=""
 for _tu in "${TOR_USERS[@]}"; do
     TOR_UID=$(id -u "$_tu" 2>/dev/null)
-    [[ -n "$TOR_UID" ]] && break
+    if [[ -n "$TOR_UID" ]]; then
+        TOR_USER="$_tu"
+        break
+    fi
 done
 NON_TOR="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 TORRC="/etc/tor/torrc"
@@ -225,7 +229,7 @@ check_dependencies() {
         echo -e "    Install the missing packages using your distro's package manager.${RESET}"; exit 1
     fi
     if [[ -z "$TOR_UID" ]]; then
-        echo -e "${RED}[✗] 'tor' system user not found. Is tor installed?${RESET}"; exit 1
+        echo -e "${RED}[✗] Tor system user not found (looked for: ${TOR_USERS[*]}). Is tor installed?${RESET}"; exit 1
     fi
 }
 
@@ -287,7 +291,6 @@ cmd_check() {
         echo -e "  OS:        $(grep -oP '(?<=^PRETTY_NAME=").*(?=")' /etc/os-release 2>/dev/null || grep -oP '(?<=^PRETTY_NAME=).*' /etc/os-release 2>/dev/null | tr -d '"')"
     fi
     echo -e "  Kernel:    $(uname -rs 2>/dev/null)"
-    echo -e "  Init:      ${CYAN}${INIT}${RESET}"
 
     # ── Dependencies ────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── Dependencies ─────────────────────────${RESET}"
@@ -306,7 +309,7 @@ cmd_check() {
     echo -e "\n  ${BOLD}── Tor user ─────────────────────────────${RESET}"
     echo -e "  Lookup:    ${TOR_USERS[*]}"
     if [[ -n "$TOR_UID" ]]; then
-        echo -e "  Found:     UID ${TOR_UID}"
+        echo -e "  Found:     ${TOR_USER} (UID ${TOR_UID})"
     else
         echo -e "  Found:     ${RED}none${RESET}"
         all_ok=1
