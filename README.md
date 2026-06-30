@@ -18,17 +18,18 @@ A Bash script that transparently routes all system TCP traffic through the [Tor]
     3.  [`stop`](#stop)
     4.  [`status`](#status)
     5.  [`newnode [CC]`](#newnode-cc)
-7.  [Known limitations](#known-limitations)
-    1.  [Browser WebRTC](#browser-webrtc)
-    2.  [UDP applications](#udp-applications)
-    3.  [Tor is not a VPN](#tor-is-not-a-vpn)
-    4.  [Exit node country pinning](#exit-node-country-pinning)
-    5.  [Exit node blocking](#exit-node-blocking)
-9.  [Verifying you are connected through Tor](#verifying-you-are-connected-through-tor)
-10.  [Troubleshooting](#troubleshooting)
-11.  [File locations](#file-locations)
-12.  [Security notes](#security-notes)
-13.  [License](#license)
+    6.  [`check`](#check)
+6.  [Known limitations](#known-limitations)
+     1.  [Browser WebRTC](#browser-webrtc)
+     2.  [UDP applications](#udp-applications)
+     3.  [Tor is not a VPN](#tor-is-not-a-vpn)
+     4.  [Exit node country pinning](#exit-node-country-pinning)
+     5.  [Exit node blocking](#exit-node-blocking)
+7.  [Verifying you are connected through Tor](#verifying-you-are-connected-through-tor)
+8.  [Troubleshooting](#troubleshooting)
+9.  [File locations](#file-locations)
+10.  [Security notes](#security-notes)
+11.  [License](#license)
 
 ---
 
@@ -103,6 +104,7 @@ sudo tor-route <command>
 | `status` | Show current routing state, exit node country, and public IP |
 | `newnode [CC]` | Request a new Tor exit node. Optionally switch or clear the country pin |
 | `countries` | Print a full list of all supported country codes |
+| `check` | Run a thorough dry-run system check (safe to paste in GitHub issues) |
 
 ### Examples
 
@@ -127,6 +129,9 @@ sudo tor-route newnode jp
 
 # List all supported country codes
 sudo tor-route countries
+
+# Run a system health check (safe to paste in bug reports)
+sudo tor-route check
 
 # Restore your normal internet connection
 sudo tor-route stop
@@ -184,6 +189,21 @@ Your machine ──► Guard node ──► Middle node ──► Exit node ─�
 
 The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. The current IP and country are shown before and after so you can confirm the change.
 
+### `check`
+
+Runs a comprehensive, read-only system diagnostic without modifying anything. The output is designed to be safe for pasting directly into GitHub issues — it reveals no public IPs, nameserver addresses, hostnames or search domains:
+
+- **System** — script version, OS release, kernel, detected init system
+- **Dependencies** — each binary found with its version string
+- **Tor user** — which system usernames were tried, which one matched
+- **Tor service** — running/stopped, listening TCP and DNS ports
+- **torrc** — path, permissions, and whether the script's config block is present
+- **State files** — which of the 5 backup/state files exist
+- **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy
+- **DNS** — resolv.conf type (symlink/regular file), line count, nameserver count (no actual addresses)
+- **Tor log** — last 5 lines of journal/log output
+- **Verdict** — pass/fail summary with an invitation to paste the full output in an issue
+
 ---
 
 ## Known limitations
@@ -228,6 +248,10 @@ If either site reports that you are **not** using Tor after running `start`, run
 
 **Tor fails to start**
 ```bash
+# Quick diagnostics (safe to paste in bug reports)
+sudo tor-route check
+
+# Detailed logs:
 # systemd
 journalctl -u tor -n 50
 
