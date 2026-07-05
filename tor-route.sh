@@ -415,6 +415,7 @@ cmd_check() {
     else
         echo -e "  Log file:  ${TOR_LOG_FILE:-'(not configured)'}"
         echo -e "  ${YELLOW}(not found)${RESET}"
+        all_ok=1
     fi
 
     # ── Verdict ─────────────────────────────────────────────────────────────
@@ -524,12 +525,14 @@ fix_dns_start() {
     # sends traffic to that socket, systemd automatically starts the full
     # service. If we only mask systemd-resolved.service but leave the sockets
     # alive, any DNS query will silently bring systemd-resolved back to life.
-    echo -e "${YELLOW}[i] Masking DNS resolver units (systemd only)...${RESET}"
-    for unit in "${RESOLVED_UNITS[@]}"; do
-        resolver_mask_now "$unit" 2>/dev/null && \
-            echo -e "    Masked: ${unit}" || \
-            echo -e "    ${YELLOW}(skipped - not found: ${unit})${RESET}"
-    done
+    if [[ "$INIT" == "systemd" ]]; then
+        echo -e "${YELLOW}[i] Masking DNS resolver units...${RESET}"
+        for unit in "${RESOLVED_UNITS[@]}"; do
+            resolver_mask_now "$unit" 2>/dev/null && \
+                echo -e "    Masked: ${unit}" || \
+                echo -e "    ${YELLOW}(skipped - not found: ${unit})${RESET}"
+        done
+    fi
 
     # Write a plain resolv.conf pointing to 127.0.0.1.
     # iptables will intercept port-53 queries there and forward them to
