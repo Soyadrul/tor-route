@@ -65,7 +65,7 @@ With tor-route:
 ## Requirements
 
 - **Root / sudo access**
-- `tor`, `iptables`, `curl`, `ss` (from `iproute2` / `iproute`)
+- `tor`, `iptables` (includes `ip6tables` on most distros), `curl`, `ss` (from `iproute2` / `iproute`)
 - `conntrack-tools` — optional, provides `conntrack` used to flush stale NAT entries on stop
 - A supported init system: systemd, OpenRC, Runit, or SysVinit
 
