@@ -29,7 +29,8 @@ A Bash script that transparently routes all system TCP traffic through the [Tor]
 8.  [Troubleshooting](#troubleshooting)
 9.  [File locations](#file-locations)
 10.  [Security notes](#security-notes)
-11.  [License](#license)
+11.  [TO-DO](#to-do)
+12.  [License](#license)
 
 ---
 
@@ -143,7 +144,7 @@ sudo tor-route stop
 
 ### `start [CC]`
 
-1. Validates the optional country code `CC` against the full ISO 3166-1 alpha-2 list.
+1. Validates the optional country code `CC` against the full [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) list.
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country.
 3. Saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
 4. Detects and displays the init system, then records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed.
@@ -154,7 +155,7 @@ sudo tor-route stop
 
 ### `countries`
 
-Prints a formatted table of all supported ISO 3166-1 alpha-2 country codes alongside usage examples. Useful to look up the code for a specific country before running `start` or `newnode`.
+Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country codes alongside usage examples. Useful to look up the code for a specific country before running `start` or `newnode`.
 
 ### `stop`
 
