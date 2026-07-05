@@ -14,6 +14,7 @@
 #    sudo tor-route check         → Thorough dry-run system check (safe to paste in GitHub issues)
 # =============================================================================
 
+VERSION="1.3.0"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
@@ -209,7 +210,7 @@ require_init() {
 # ── Helpers ───────────────────────────────────────────────────────────────────
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════════╗"
-    echo -e "║        Tor Traffic Router  v1.3.0        ║"
+    echo -e "║        Tor Traffic Router  v${VERSION}        ║"
     echo -e "╚══════════════════════════════════════════╝${RESET}\n"
 }
 
@@ -286,14 +287,14 @@ cmd_check() {
 
     # ── System ──────────────────────────────────────────────────────────────
     echo -e "  ${BOLD}── System ──────────────────────────────${RESET}"
-    echo -e "  Script:    tor-route.sh v1.2.0"
+    echo -e "  Script:    tor-route.sh v${VERSION}"
     if [[ -f /etc/os-release ]]; then
         echo -e "  OS:        $(grep -oP '(?<=^PRETTY_NAME=").*(?=")' /etc/os-release 2>/dev/null || grep -oP '(?<=^PRETTY_NAME=).*' /etc/os-release 2>/dev/null | tr -d '"')"
     fi
     echo -e "  Kernel:    $(uname -rs 2>/dev/null)"
 
     # ── Dependencies ────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Dependencies ─────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── Dependencies ────────────────────────${RESET}"
     local v
     for cmd in tor iptables ip6tables curl ss; do
         if command -v "$cmd" &>/dev/null; then
@@ -306,7 +307,7 @@ cmd_check() {
     done
 
     # ── Tor user ────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Tor user ─────────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── Tor user ────────────────────────────${RESET}"
     echo -e "  Lookup:    ${TOR_USERS[*]}"
     if [[ -n "$TOR_UID" ]]; then
         echo -e "  Found:     ${TOR_USER} (UID ${TOR_UID})"
@@ -316,7 +317,7 @@ cmd_check() {
     fi
 
     # ── Tor service ────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Tor service ──────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── Tor service ─────────────────────────${RESET}"
     if service_tor_running; then
         echo -e "  Status:    ${GREEN}Running${RESET}"
     else
@@ -326,7 +327,7 @@ cmd_check() {
     echo -e "  DNS port:  $(ss -ulnp 2>/dev/null | grep tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
 
     # ── Torrc ───────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── torrc ────────────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── torrc ───────────────────────────────${RESET}"
     if [[ -f "$TORRC" ]]; then
         echo -e "  Path:      ${TORRC}"
         echo -e "  Readable:  $([[ -r "$TORRC" ]] && echo "${GREEN}yes${RESET}" || echo "${RED}no${RESET}")"
@@ -344,7 +345,7 @@ cmd_check() {
     fi
 
     # ── State files ─────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── State files ──────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── State files ─────────────────────────${RESET}"
     for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE; do
         local path="${!f}"
         if [[ -f "$path" ]]; then
@@ -355,7 +356,7 @@ cmd_check() {
     done
 
     # ── Firewall ────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Firewall ─────────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── Firewall ────────────────────────────${RESET}"
     echo -e "  iptables:  $(iptables --version 2>/dev/null || echo 'not found')"
     if iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
         echo -e "  NAT OUTPUT:"
@@ -377,7 +378,7 @@ cmd_check() {
     fi
 
     # ── DNS ──────────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── DNS ──────────────────────────────────${RESET}"
+    echo -e "\n  ${BOLD}── DNS ─────────────────────────────────${RESET}"
     if [[ -L /etc/resolv.conf ]]; then
         echo -e "  resolv.conf:  symlink → $(readlink /etc/resolv.conf)"
     elif [[ -f /etc/resolv.conf ]]; then
@@ -394,7 +395,7 @@ cmd_check() {
     fi
 
     # ── Tor log ─────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Tor log (last 5 lines) ───────────────${RESET}"
+    echo -e "\n  ${BOLD}── Tor log (last 5 lines) ──────────────${RESET}"
     local loglines
     if [[ "$INIT" == "systemd" ]]; then
         loglines=$(journalctl -u tor -n 5 --no-pager 2>/dev/null)
