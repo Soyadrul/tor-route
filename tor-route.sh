@@ -747,6 +747,7 @@ cmd_start() {
     for i in {1..25}; do
         sleep 1; echo -n "."
         service_tor_log 2>/dev/null | grep -q "Bootstrapped 100%" && break
+        ss -tlnp 2>/dev/null | grep -q ":${TOR_TRANS_PORT}" && break
     done
     echo ""
 
@@ -766,6 +767,12 @@ cmd_start() {
     echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
     echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
     echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
+    echo -n "    Waiting for public IP"
+    for i in {1..10}; do
+        sleep 1; echo -n "."
+        curl -sf --max-time 4 -4 https://api.ipify.org >/dev/null 2>&1 && break
+    done
+    echo ""
     show_ip
     echo -e "\n    ${BOLD}sudo ${0##*/} newnode [CC]${RESET}  - new exit node / new IP"
     echo -e "    ${BOLD}sudo ${0##*/} stop${RESET}          - restore normal internet\n"
