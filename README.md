@@ -92,7 +92,7 @@ No other configuration is required before first use.
 
 ## Usage
 
-All commands must be run as root.
+All commands must be run as root, except `countries` which only prints a list.
 
 ```bash
 sudo tor-route <command>
@@ -333,4 +333,4 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 ## License
 
-This project is open source and avilable under the [GPL-3.0 License](LICENSE).
+This project is open source and available under the [GPL-3.0 License](LICENSE).
