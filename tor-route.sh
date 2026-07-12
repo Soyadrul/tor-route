@@ -535,9 +535,9 @@ fix_dns_start() {
         done
     fi
 
-    # Write a plain resolv.conf pointing to 127.0.0.1.
-    # iptables will intercept port-53 queries there and forward them to
-    # Tor's DNS listener on port 5353.
+    # Write a plain resolv.conf pointing to 127.0.0.1
+    # iptables will intercept port 53 queries there and forward them to
+    # Tor's DNS listener on port ${TOR_DNS_PORT}.
     rm -f /etc/resolv.conf
     echo "nameserver 127.0.0.1" > /etc/resolv.conf
     echo -e "${GREEN}[✓] /etc/resolv.conf → 127.0.0.1 (iptables will forward to Tor:${TOR_DNS_PORT}).${RESET}"
