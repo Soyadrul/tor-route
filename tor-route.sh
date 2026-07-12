@@ -395,25 +395,26 @@ cmd_check() {
     fi
 
     # ── Tor log ─────────────────────────────────────────────────────────────
-    echo -e "\n  ${BOLD}── Tor log (last 5 lines) ──────────────${RESET}"
+    echo -e "\n  ${BOLD}── Tor log ─────────────────────────────${RESET}"
     local loglines
     if [[ "$INIT" == "systemd" ]]; then
+        echo -e "  Source:    journalctl -u tor (last 5 lines)"
         loglines=$(journalctl -u tor -n 5 --no-pager 2>/dev/null)
         if [[ -n "$loglines" ]]; then
             echo "$loglines" | sed 's/^/  /'
         else
-            echo -e "  ${YELLOW}(no Tor journal entries yet)${RESET}"
+            echo -e "  ${YELLOW}(no entries yet)${RESET}"
         fi
     elif [[ -f "$TOR_LOG_FILE" ]]; then
-        echo -e "  Log file:  ${TOR_LOG_FILE}"
+        echo -e "  Source:    ${TOR_LOG_FILE} (tail, last 5 lines)"
         loglines=$(tail -n 5 "$TOR_LOG_FILE" 2>/dev/null)
         if [[ -n "$loglines" ]]; then
             echo "$loglines" | sed 's/^/  /'
         else
-            echo -e "  ${YELLOW}(empty log)${RESET}"
+            echo -e "  ${YELLOW}(empty)${RESET}"
         fi
     else
-        echo -e "  Log file:  ${TOR_LOG_FILE:-'(not configured)'}"
+        echo -e "  Source:    ${TOR_LOG_FILE} (tail)"
         echo -e "  ${YELLOW}(not found)${RESET}"
         all_ok=1
     fi
