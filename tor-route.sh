@@ -544,6 +544,14 @@ fix_dns_start() {
 }
 
 fix_dns_stop() {
+    # If fix_dns_start never ran (e.g. `start` failed before touching DNS),
+    # there is nothing to restore - the 1.1.1.1 fallback below would
+    # otherwise clobber an untouched resolv.conf.
+    if [[ ! -f "$RESOLVED_STATE_FILE" && ! -f "$RESOLV_BACKUP" ]]; then
+        echo -e "${YELLOW}[i] DNS was not modified by this run - leaving it untouched.${RESET}"
+        return 0
+    fi
+
     # Unmask resolver units (systemd only; other inits skip this)
     echo -e "${YELLOW}[i] Unmasking DNS resolver units (systemd only)...${RESET}"
     for unit in "${RESOLVED_UNITS[@]}"; do
@@ -740,7 +748,6 @@ cmd_start() {
     fi
 
     configure_torrc "$country"
-    fix_dns_start
 
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
     service_tor_restart
@@ -765,15 +772,35 @@ cmd_start() {
     save_iptables
     apply_iptables
 
-    echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
-    echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
-    echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
-    echo -n "    Waiting for public IP"
-    for i in {1..10}; do
+    # Swap resolv.conf only once the redirect rules exist, so the system's
+    # DNS keeps working until then instead of pointing at a dead
+    # 127.0.0.1:53 for the whole bootstrap.
+    fix_dns_start
+
+    # The probe below goes through the iptables redirect, so it only succeeds
+    # once Tor has built a usable circuit. Announce success only then; if Tor
+    # is still bootstrapping after the timeout, warn instead of claiming ✓.
+    echo -n "    Waiting for traffic to route through Tor"
+    local routed=0
+    for i in {1..45}; do
         sleep 1; echo -n "."
-        curl -sf --max-time 4 -4 https://api.ipify.org >/dev/null 2>&1 && break
+        if curl -sf --max-time 2 -4 https://api.ipify.org >/dev/null 2>&1 ||
+           curl -sf --max-time 2 -4 https://check.torproject.org >/dev/null 2>&1; then
+            routed=1
+            break
+        fi
     done
     echo ""
+
+    if [[ $routed -eq 1 ]]; then
+        echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
+    else
+        echo -e "\n${YELLOW}${BOLD}[!] Tor routing rules are active, but traffic is not flowing yet.${RESET}"
+        echo -e "    ${YELLOW}Tor may still be bootstrapping - traffic will route automatically once it is ready.${RESET}"
+        echo -e "    Verify with: ${BOLD}sudo ${0##*/} status${RESET}"
+    fi
+    echo -e "    ${YELLOW}Tip:${RESET} Also disable WebRTC inside your browser for full protection."
+    echo -e "    Firefox: about:config → media.peerconnection.enabled → false\n"
     show_ip
     echo -e "\n    ${BOLD}sudo ${0##*/} newnode [CC]${RESET}  - new exit node / new IP"
     echo -e "    ${BOLD}sudo ${0##*/} stop${RESET}          - restore normal internet\n"
