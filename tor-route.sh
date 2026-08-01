@@ -415,8 +415,7 @@ cmd_check() {
         fi
     else
         echo -e "  Source:    ${TOR_LOG_FILE} (tail)"
-        echo -e "  ${YELLOW}(not found)${RESET}"
-        all_ok=1
+        echo -e "  ${YELLOW}(not found - not required; readiness is checked via ports and traffic probe)${RESET}"
     fi
 
     # ── Verdict ─────────────────────────────────────────────────────────────
@@ -501,6 +500,19 @@ cleanup_torrc() {
             /^StrictNodes /d' "$TORRC"
     rm -f "$COUNTRY_FILE"
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
+}
+
+# Unwind hook for `start` when the user interrupts it after the firewall has
+# been redirected (Ctrl+C during the traffic wait). Leaves the system exactly
+# as it was: rules restored, DNS restored, Tor stopped, torrc cleaned.
+interrupt_unwind() {
+    echo ""
+    echo -e "${RED}[✗] Interrupted. Restoring normal internet...${RESET}"
+    restore_iptables
+    fix_dns_stop
+    service_tor_stop
+    cleanup_torrc
+    exit 1
 }
 
 # ── DNS resolver handling ─────────────────────────────────────────────────────
@@ -780,6 +792,8 @@ cmd_start() {
     # The probe below goes through the iptables redirect, so it only succeeds
     # once Tor has built a usable circuit. Announce success only then; if Tor
     # is still bootstrapping after the timeout, warn instead of claiming ✓.
+    # While waiting, an interrupt must unwind the redirect (see interrupt_unwind).
+    trap interrupt_unwind INT TERM
     echo -n "    Waiting for traffic to route through Tor"
     local routed=0
     for i in {1..45}; do
@@ -790,6 +804,7 @@ cmd_start() {
             break
         fi
     done
+    trap - INT TERM
     echo ""
 
     if [[ $routed -eq 1 ]]; then
@@ -819,7 +834,26 @@ cmd_stop() {
     cleanup_torrc
 
     echo -e "\n${GREEN}${BOLD}[✓] Normal internet restored.${RESET}\n"
-    sleep 2
+    # The restored DNS resolver (systemd-resolved in particular) can take a
+    # few seconds to accept queries after start. Verify direct connectivity
+    # with a bounded retry before showing the public IP.
+    echo -n "    Verifying direct connectivity"
+    local connected=0
+    for i in {1..10}; do
+        sleep 1; echo -n "."
+        if curl -sf --max-time 2 -4 https://api.ipify.org >/dev/null 2>&1; then
+            connected=1
+            break
+        fi
+    done
+    echo ""
+    if [[ $connected -eq 1 ]]; then
+        echo -e "${GREEN}[✓] Direct internet connectivity confirmed.${RESET}"
+    else
+        echo -e "${YELLOW}[!] Direct internet not verified yet - the resolver may still be starting.${RESET}"
+        echo -e "    ${YELLOW}If DNS stays broken, run ${BOLD}sudo ${0##*/} stop${RESET}${YELLOW} again.${RESET}"
+    fi
+    echo ""
     show_ip
     echo ""
 }
@@ -911,16 +945,50 @@ cmd_newnode() {
         configure_torrc ""
     fi
 
-    echo -e "  ${YELLOW}Current:${RESET}"; show_ip
-
     # SIGHUP = reload config and rebuild all circuits.
     # New circuit = new Guard → Middle → Exit chain = new public IP.
+    # Capture the current IP first (same endpoint show_ip uses) so a change
+    # can be verified instead of assuming it after a fixed wait.
+    local old_ip changed=0
+    old_ip=$(curl -s --max-time 5 -4 https://api.ipify.org 2>/dev/null)
+
+    echo -e "  ${YELLOW}Current:${RESET}"; show_ip
     service_tor_reload
-    echo -e "\n  Waiting for new circuit..."; sleep 7
+
+    # Abort cleanly if the user interrupts the wait (nothing to unwind here -
+    # the reload already happened - but the message makes the state clear).
+    trap 'echo ""; echo -e "${RED}[✗] Interrupted - new circuit request aborted.${RESET}"; exit 1' INT TERM
+
+    if [[ -n "$old_ip" ]]; then
+        echo -e "\n  Waiting for a new circuit (new IP)..."
+        for i in {1..30}; do
+            sleep 1; echo -n "."
+            local new_ip
+            new_ip=$(curl -sf --max-time 2 -4 https://api.ipify.org 2>/dev/null)
+            if [[ -n "$new_ip" && "$new_ip" != "$old_ip" ]]; then
+                changed=1
+                break
+            fi
+        done
+        echo ""
+    else
+        # Could not read the IP before switching - cannot verify a change.
+        echo -e "\n  Waiting for a new circuit..."; sleep 15
+    fi
+    trap - INT TERM
 
     echo -e "\n  ${YELLOW}New:${RESET}"; show_ip
-    echo -e "\n${GREEN}[✓] New circuit requested.${RESET}"
-    echo -e "    ${YELLOW}Tip:${RESET} If the IP is unchanged, wait ~15 s and try again.\n"
+    if [[ $changed -eq 1 ]]; then
+        echo -e "\n${GREEN}[✓] New circuit requested - IP changed.${RESET}"
+    else
+        echo -e "\n${YELLOW}${BOLD}[!] New circuit requested, but the IP has not changed yet.${RESET}"
+        if [[ -n "$old_ip" ]]; then
+            echo -e "    ${YELLOW}Tor may have reused the same exit node - wait ~15 s and try again.${RESET}"
+        else
+            echo -e "    ${YELLOW}Could not read the IP before switching, so the change could not be verified.${RESET}"
+        fi
+    fi
+    echo ""
 }
 
 # =============================================================================
