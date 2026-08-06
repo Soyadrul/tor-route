@@ -860,6 +860,7 @@ cmd_stop() {
 
 cmd_status() {
     banner
+    require_root status
     require_init
     echo -e "${CYAN}[→] Status:${RESET}\n"
 
