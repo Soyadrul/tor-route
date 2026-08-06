@@ -162,7 +162,9 @@ sudo tor-route stop
 4. Verifies that Tor is actually listening on both expected ports.
 5. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
 6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
-7. Announces success only once a request actually travels through Tor (a probe to `api.ipify.org`, falling back to `check.torproject.org`). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but traffic isn't flowing yet.
+7. Announces success only once a request actually travels through Tor (a probe to `api.ipify.org`, falling back to `check.torproject.org`). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet.
+
+If routing is already active (the Tor redirect rule is present), `start` refuses to re-apply and exits instead — re-running it would overwrite the firewall and DNS backups with the current Tor state, so a later `stop` would restore the wrong data. Run `stop` first to re-apply, or `newnode` to change the exit node.
 
 ### `countries`
 
@@ -171,12 +173,11 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 ### `stop`
 
 1. Detects and displays the init system.
-2. Flushes all iptables/ip6tables rules and resets ip6tables default policies to ACCEPT. Then tries to restore any custom pre-Tor rules from backup. This guarantees a working baseline regardless of backup integrity — the clean flush runs first, and the backup restore is a best-effort overlay.
-3. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
-4. Unmasks DNS resolver units (systemd only; other inits skip this). Restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`).
-5. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
-6. Stops the Tor service.
-7. Removes the settings added to `/etc/tor/torrc` and verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
+2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup (best-effort overlay). If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
+3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks DNS resolver units (systemd only; other inits skip this) and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`). If the DNS was never modified, it is left untouched.
+4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
+5. Stops the Tor service.
+6. Removes the settings added to `/etc/tor/torrc` and verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
 
@@ -293,10 +294,10 @@ If all lines show ✓ but the IP check website still shows your real IP, either 
 **DNS not resolving after `stop`**
 
 The script prefers a symlink to systemd-resolved's live stub-resolv.conf over a static backup. The DNS resolver can take a moment to fully start after `stop` — the command now waits and verifies direct connectivity automatically, warning you if the resolver still isn't answering. If it still doesn't resolve:
-```bash
-sudo tor-route stop
-```
-Run `stop` a second time — it will flush rules and reset policies, which reliably restores connectivity if the first run left something stale.
+
+- Give it a few more seconds and re-check with `sudo tor-route status` — the resolver may simply still be starting.
+- If it still fails, restart the DNS resolver directly (e.g. `systemctl restart systemd-resolved` on systemd).
+- Running `stop` again will **not** help — since the first `stop` already removed the backups, a second `stop` no longer flushes rules or resets policies; it only re-verifies connectivity.
 
 **`newnode` does not change the IP**
 
