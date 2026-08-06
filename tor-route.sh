@@ -626,6 +626,13 @@ save_iptables() {
 }
 
 restore_iptables() {
+    # If `start` never saved a firewall (backups absent), there is nothing to
+    # restore - flushing everything here would wipe the user's existing rules.
+    if [[ ! -f "$IPTABLES_BACKUP" && ! -f "$IP6TABLES_BACKUP" ]]; then
+        echo -e "${YELLOW}[i] Firewall was not modified by this run - leaving it untouched.${RESET}"
+        return 0
+    fi
+
     # Stage 1: always flush and reset policies — guarantees a working baseline
     # regardless of backup state. Without this, ip6tables DROP policies set by
     # apply_iptables persist after ip6tables -F (which only flushes rules).
