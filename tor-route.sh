@@ -746,6 +746,14 @@ cmd_start() {
     require_init
     check_dependencies
 
+    # Refuse to re-apply over an active session. Re-running `start` would
+    # overwrite the firewall/resolv.conf backups with the *current* Tor state,
+    # so a later `stop` would restore the wrong data.
+    if iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
+        echo -e "${YELLOW}[i] Tor routing is already active. Run ${BOLD}sudo ${0##*/} stop${RESET}${YELLOW} first to re-apply, or use ${BOLD}sudo ${0##*/} newnode${RESET}${YELLOW} to change the exit node.${RESET}"
+        exit 0
+    fi
+
     # Parse optional country code argument ($2 when called as `start CC`)
     local country=""
     if [[ -n "${2:-}" ]]; then
