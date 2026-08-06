@@ -157,13 +157,12 @@ sudo tor-route stop
 ### `start [CC]`
 
 1. Validates the optional country code `CC` against the full [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) list.
-2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country.
-3. Saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
-4. Detects and displays the init system, then records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed.
-5. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener.
-6. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to bootstrap to 100%.
-7. Verifies that Tor is actually listening on both expected ports before touching the firewall.
-8. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
+2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country, and saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
+3. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to be ready — either the log reports "Bootstrapped 100%" or the trans proxy port starts listening.
+4. Verifies that Tor is actually listening on both expected ports.
+5. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules.
+6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
+7. Announces success only once a request actually travels through Tor (a probe to `api.ipify.org`, falling back to `check.torproject.org`). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but traffic isn't flowing yet.
 
 ### `countries`
 
@@ -177,7 +176,7 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 4. Unmasks DNS resolver units (systemd only; other inits skip this). Restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`).
 5. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 6. Stops the Tor service.
-7. Removes the settings added to `/etc/tor/torrc`.
+7. Removes the settings added to `/etc/tor/torrc` and verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
 
@@ -200,7 +199,7 @@ Detects and displays the init system. Updates torrc with the new country prefere
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
 ```
 
-The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. The current IP and country are shown before and after so you can confirm the change.
+The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. `newnode` records your current IP before reloading Tor, then waits (up to ~30 s) until the IP actually changes before showing the `New:` address. If Tor reuses the same exit node and the IP doesn't change, it warns instead of claiming success.
 
 ### `check`
 
@@ -214,7 +213,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **State files** — which of the 5 backup/state files exist
 - **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy
 - **DNS** — resolv.conf type (symlink/regular file), line count, nameserver count (no actual addresses)
-- **Tor log** — last 5 lines of journal/log output
+- **Tor log** — last 5 lines of journal/log output (a missing log is a note, not a failed check)
 - **Verdict** — pass/fail summary with an invitation to paste the full output in an issue
 
 ---
@@ -293,7 +292,7 @@ If all lines show ✓ but the IP check website still shows your real IP, either 
 
 **DNS not resolving after `stop`**
 
-The script now prefers a symlink to systemd-resolved's live stub-resolv.conf over a static backup. The DNS resolver may need a moment to fully start. Wait a few seconds, or run:
+The script prefers a symlink to systemd-resolved's live stub-resolv.conf over a static backup. The DNS resolver can take a moment to fully start after `stop` — the command now waits and verifies direct connectivity automatically, warning you if the resolver still isn't answering. If it still doesn't resolve:
 ```bash
 sudo tor-route stop
 ```
