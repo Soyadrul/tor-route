@@ -358,7 +358,7 @@ cmd_check() {
     # ── Firewall ────────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── Firewall ────────────────────────────${RESET}"
     echo -e "  iptables:  $(iptables --version 2>/dev/null || echo 'not found')"
-    if iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
+    if is_routing_active; then
         echo -e "  NAT OUTPUT:"
         iptables -t nat -L OUTPUT -n 2>/dev/null | sed 's/^/    /'
         echo -e "  Filter OUTPUT:"
@@ -713,6 +713,13 @@ apply_iptables() {
     echo -e "${YELLOW}[i] IPv6 blocked. Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
 }
 
+# 0 if the Tor transparent redirect is currently present in iptables,
+# non-zero otherwise. Also used by `status`/`check`/`start` as the canonical
+# "is Tor routing active?" test.
+is_routing_active() {
+    iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"
+}
+
 # ── Public IP display ─────────────────────────────────────────────────────────
 show_ip() {
     echo -e "${CYAN}[i] Fetching public IP...${RESET}"
@@ -756,7 +763,7 @@ cmd_start() {
     # Refuse to re-apply over an active session. Re-running `start` would
     # overwrite the firewall/resolv.conf backups with the *current* Tor state,
     # so a later `stop` would restore the wrong data.
-    if iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
+    if is_routing_active; then
         echo -e "${YELLOW}[i] Tor routing is already active. Run ${BOLD}sudo ${0##*/} stop${RESET}${YELLOW} first to re-apply, or use ${BOLD}sudo ${0##*/} newnode${RESET}${YELLOW} to change the exit node.${RESET}"
         exit 0
     fi
@@ -883,9 +890,11 @@ cmd_status() {
         && echo -e "  Tor service:       ${GREEN}${BOLD}Running ✓${RESET}" \
         || echo -e "  Tor service:       ${RED}${BOLD}Stopped${RESET}"
 
-    iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}" \
-        && echo -e "  TCP routing:       ${GREEN}${BOLD}Through Tor ✓${RESET}" \
-        || echo -e "  TCP routing:       ${YELLOW}Direct (not through Tor)${RESET}"
+    if is_routing_active; then
+        echo -e "  TCP routing:       ${GREEN}${BOLD}Through Tor ✓${RESET}"
+    else
+        echo -e "  TCP routing:       ${YELLOW}Direct (not through Tor)${RESET}"
+    fi
 
     iptables -L OUTPUT 2>/dev/null | grep -q "udp.*DROP\|DROP.*udp" \
         && echo -e "  UDP / WebRTC:      ${GREEN}${BOLD}Blocked ✓${RESET}" \
@@ -895,18 +904,35 @@ cmd_status() {
         && echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" \
         || echo -e "  IPv6:              ${YELLOW}Not blocked${RESET}"
 
-    # Check the DNS resolver state
-    if [[ "$INIT" == "systemd" ]]; then
-        local resolved_ok=true
-        for unit in "${RESOLVED_UNITS[@]}"; do
-            if resolver_is_active "$unit"; then
-                resolved_ok=false
-                echo -e "  DNS ($unit): ${RED}${BOLD}ACTIVE - may leak!${RESET}"
+    # Check the DNS resolver state. This only means something while routing is
+    # active: `start` masks the resolver (systemd) or repoints resolv.conf.
+    # Outside a routed session the system's normal DNS setup is expected.
+    if is_routing_active; then
+        if [[ "$INIT" == "systemd" ]]; then
+            local resolved_ok=true
+            for unit in "${RESOLVED_UNITS[@]}"; do
+                # Mask state is only visible via `is-enabled` ("masked");
+                # is-active reflects the runtime state, not whether the unit
+                # could silently come back via socket activation.
+                if [[ "$(systemctl is-enabled "$unit" 2>/dev/null)" != "masked" ]]; then
+                    resolved_ok=false
+                    echo -e "  DNS ($unit): ${RED}${BOLD}NOT masked - may leak!${RESET}"
+                fi
+            done
+            $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
+        else
+            if grep -q '^nameserver 127.0.0.1' /etc/resolv.conf 2>/dev/null; then
+                echo -e "  DNS:               ${GREEN}${BOLD}/etc/resolv.conf → Tor ✓${RESET}"
+            else
+                echo -e "  DNS:               ${RED}${BOLD}resolv.conf NOT pointing at Tor - leak possible!${RESET}"
             fi
-        done
-        $resolved_ok && echo -e "  DNS (resolved):    ${GREEN}${BOLD}All units masked ✓${RESET}"
+        fi
     else
-        echo -e "  DNS:               ${GREEN}${BOLD}/etc/resolv.conf → Tor ✓${RESET}"
+        if resolver_is_active systemd-resolved.service; then
+            echo -e "  DNS:               ${YELLOW}systemd-resolved active (normal, not routed)${RESET}"
+        else
+            echo -e "  DNS:               ${YELLOW}normal (not routed through Tor)${RESET}"
+        fi
     fi
 
     # Show configured exit node country from state file
