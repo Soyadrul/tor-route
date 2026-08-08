@@ -502,9 +502,11 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
-# Unwind hook for `start` when the user interrupts it after the firewall has
-# been redirected (Ctrl+C during the traffic wait). Leaves the system exactly
-# as it was: rules restored, DNS restored, Tor stopped, torrc cleaned.
+# Unwind hook for `start` when the user interrupts it at any point after the
+# script starts mutating the system (torrc, Tor, firewall, DNS). Leaves the
+# system exactly as it was: rules restored, DNS restored, Tor stopped, torrc
+# cleaned. Safe to run at any time because restore_iptables/fix_dns_stop
+# no-op through their guards when nothing was saved yet.
 interrupt_unwind() {
     echo ""
     echo -e "${RED}[✗] Interrupted. Restoring normal internet...${RESET}"
@@ -814,8 +816,6 @@ cmd_start() {
     # The probe below goes through the iptables redirect, so it only succeeds
     # once Tor has built a usable circuit. Announce success only then; if Tor
     # is still bootstrapping after the timeout, warn instead of claiming ✓.
-    # While waiting, an interrupt must unwind the redirect (see interrupt_unwind).
-    trap interrupt_unwind INT TERM
     echo -n "    Waiting for traffic to route through Tor"
     local routed=0
     for i in {1..45}; do
@@ -974,7 +974,12 @@ cmd_newnode() {
         }
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
         # Update torrc with the new country preference and reload Tor
-        configure_torrc "$country"
+# From here on the script mutates the system (torrc, Tor, firewall, DNS).
+    # An interrupt must unwind all of it. The trap is safe to install early:
+    # restore_iptables and fix_dns_stop no-op via their guards when nothing
+    # was saved yet, so a Ctrl+C during bootstrap leaves everything untouched.
+    trap interrupt_unwind INT TERM
+    configure_torrc "$country"
     else
         # If no country given, check if one was previously pinned and clear it
         local prev
