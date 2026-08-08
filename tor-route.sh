@@ -835,6 +835,11 @@ cmd_start() {
         echo -e "${CYAN}[→] Starting Tor routing with random exit node...${RESET}\n"
     fi
 
+    # From here on the script mutates the system (torrc, Tor, firewall, DNS).
+    # An interrupt must unwind all of it. The trap is safe to install early:
+    # restore_iptables and fix_dns_stop no-op via their guards when nothing
+    # was saved yet, so a Ctrl+C during bootstrap leaves everything untouched.
+    trap interrupt_unwind INT TERM
     configure_torrc "$country"
 
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
@@ -1048,12 +1053,7 @@ cmd_newnode() {
         }
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
         # Update torrc with the new country preference and reload Tor
-# From here on the script mutates the system (torrc, Tor, firewall, DNS).
-    # An interrupt must unwind all of it. The trap is safe to install early:
-    # restore_iptables and fix_dns_stop no-op via their guards when nothing
-    # was saved yet, so a Ctrl+C during bootstrap leaves everything untouched.
-    trap interrupt_unwind INT TERM
-    configure_torrc "$country"
+        configure_torrc "$country"
     else
         # If no country given, check if one was previously pinned and clear it
         local prev
