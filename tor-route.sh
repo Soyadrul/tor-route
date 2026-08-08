@@ -222,7 +222,7 @@ require_root() {
 
 check_dependencies() {
     local missing=()
-    for cmd in tor iptables ip6tables curl ss; do
+    for cmd in tor iptables ip6tables iptables-save ip6tables-save curl ss; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -296,7 +296,7 @@ cmd_check() {
     # ── Dependencies ────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── Dependencies ────────────────────────${RESET}"
     local v
-    for cmd in tor iptables ip6tables curl ss; do
+    for cmd in tor iptables ip6tables iptables-save ip6tables-save curl ss; do
         if command -v "$cmd" &>/dev/null; then
             v=$("$cmd" --version 2>/dev/null | head -1)
             echo -e "    ${GREEN}✓${RESET} ${cmd}  ${YELLOW}(${v:-version unknown})${RESET}"
@@ -621,6 +621,16 @@ verify_tor_ports() {
 save_iptables() {
     iptables-save  > "$IPTABLES_BACKUP"
     ip6tables-save > "$IP6TABLES_BACKUP"
+
+    # A failed save (missing tool, error) yields an *empty* file. An empty
+    # backup must not survive: restore_iptables' guard only checks existence,
+    # so an empty file would make `stop` flush all rules and "restore"
+    # nothing. Remove them and abort before any rules are touched.
+    if [[ ! -s "$IPTABLES_BACKUP" || ! -s "$IP6TABLES_BACKUP" ]]; then
+        rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
+        echo -e "${RED}[✗] Firewall save failed (backup empty). Aborting - your rules are untouched.${RESET}"
+        return 1
+    fi
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
 }
 
@@ -819,7 +829,9 @@ cmd_start() {
         fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
     fi
 
-    save_iptables
+    if ! save_iptables; then
+        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
+    fi
     apply_iptables
 
     # Swap resolv.conf only once the redirect rules exist, so the system's
