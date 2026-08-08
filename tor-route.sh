@@ -234,6 +234,24 @@ check_dependencies() {
     fi
 }
 
+# Lighter check for commands that every network-facing command uses.
+# Unlike check_dependencies it does NOT require the tor binary or Tor user,
+# so `stop` keeps working even if Tor was uninstalled since `start`; it only
+# guarantees the tools needed to restore or inspect the firewall are present.
+# Optional args restrict the requirement set (e.g. stop only needs
+# iptables/ip6tables - curl is only used for the post-restore probe).
+check_net_tools() {
+    local missing=() cmd
+    for cmd in "${@:-iptables ip6tables curl ss}"; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo -e "${RED}[✗] Missing: ${missing[*]}${RESET}"
+        echo -e "    Install the missing packages using your distro's package manager."
+        exit 1
+    fi
+}
+
 # ── Country code validation ───────────────────────────────────────────────────
 # Full list of ISO 3166-1 alpha-2 codes that Tor supports as exit node filters.
 # Tor uses the two-letter code wrapped in braces, e.g. {us}, {de}, {jp}.
@@ -887,6 +905,10 @@ cmd_stop() {
     banner
     require_root stop
     require_init
+    # stop must always be able to run even if Tor was uninstalled; only the
+    # restore tools are strictly required (curl is used by the verification
+    # probe and show_ip below, but a missing curl must not block restoring).
+    check_net_tools iptables ip6tables
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
     # 0 = firewall fully restored, 1 = one or both rule restores failed.
@@ -934,6 +956,7 @@ cmd_status() {
     banner
     require_root status
     require_init
+    check_net_tools
     echo -e "${CYAN}[→] Status:${RESET}\n"
 
     service_tor_running \
@@ -1009,6 +1032,7 @@ cmd_newnode() {
     banner
     require_root newnode
     require_init
+    check_net_tools
 
     if ! service_tor_running; then
         echo -e "${RED}[✗] Tor is not running. Run: sudo ${0##*/} start${RESET}"; exit 1
