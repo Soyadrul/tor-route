@@ -446,17 +446,18 @@ cmd_countries() {
 }
 
 
+# Remove only the tor-route-managed block from torrc (the marked section
+# appended by configure_torrc). Any TransPort/DNSPort/ExitNodes lines that
+# existed BEFORE tor-route (outside the markers) are left untouched.
+strip_torrc_block() {
+    sed -i '/^# --- tor-route.sh start ---$/,/^# --- tor-route.sh end ---$/d' "$TORRC" 2>/dev/null
+}
+
 configure_torrc() {
     # Optional first argument: a validated 2-letter country code, or empty for random.
     local country="${1:-}"
 
-    sed -i '/^# --- tor-route.sh/d
-            /^VirtualAddrNetworkIPv4/d
-            /^AutomapHostsOnResolve/d
-            /^TransPort /d
-            /^DNSPort /d
-            /^ExitNodes /d
-            /^StrictNodes /d' "$TORRC"
+    strip_torrc_block
 
     if [[ -n "$country" ]]; then
         # ExitNodes {cc} tells Tor to only use exit nodes in that country.
@@ -491,13 +492,9 @@ EOF
 }
 
 cleanup_torrc() {
-    sed -i '/^# --- tor-route.sh/d
-            /^VirtualAddrNetworkIPv4/d
-            /^AutomapHostsOnResolve/d
-            /^TransPort /d
-            /^DNSPort /d
-            /^ExitNodes /d
-            /^StrictNodes /d' "$TORRC"
+    # NOT removing bare TransPort/DNSPort/ExitNodes lines here: they may be
+    # the user's own pre-existing config. Only our marked block goes away.
+    strip_torrc_block
     rm -f "$COUNTRY_FILE"
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
