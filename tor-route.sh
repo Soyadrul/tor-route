@@ -950,7 +950,7 @@ cmd_stop() {
         echo -e "${GREEN}[✓] Direct internet connectivity confirmed.${RESET}"
     else
         echo -e "${YELLOW}[!] Direct internet not verified yet - the resolver may still be starting.${RESET}"
-        echo -e "    ${YELLOW}If DNS stays broken, run ${BOLD}sudo ${0##*/} stop${RESET}${YELLOW} again.${RESET}"
+        echo -e "    ${YELLOW}A second ${BOLD}stop${RESET}${YELLOW} won't change this (restore already ran); wait a moment and re-check with ${BOLD}sudo ${0##*/} status${RESET}.${RESET}"
     fi
     echo ""
     show_ip
