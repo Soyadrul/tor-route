@@ -736,7 +736,17 @@ apply_iptables() {
     ip6tables -P OUTPUT  DROP
     ip6tables -P FORWARD DROP
 
+    # Verify the policies actually took effect. If ip6tables failed silently
+    # (kernel IPv6 disabled, module missing), IPv6 traffic would keep flowing
+    # unproxied - a leak. Abort so `start` never claims success over an
+    # enabled IPv6 stack.
+    if ! ip6tables -L OUTPUT -n 2>/dev/null | grep -q "policy DROP"; then
+        echo -e "${RED}[✗] Could not apply IPv6 DROP policies - IPv6 would stay enabled and leak. Check that the ipv6 kernel module is loaded.${RESET}"
+        return 1
+    fi
+
     echo -e "${YELLOW}[i] IPv6 blocked. Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
+    return 0
 }
 
 # 0 if the Tor transparent redirect is currently present in iptables,
@@ -832,7 +842,11 @@ cmd_start() {
     if ! save_iptables; then
         fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
     fi
-    apply_iptables
+    if ! apply_iptables; then
+        # Rules were partially applied - restore what we saved, then unwind.
+        restore_iptables
+        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
+    fi
 
     # Swap resolv.conf only once the redirect rules exist, so the system's
     # DNS keeps working until then instead of pointing at a dead
