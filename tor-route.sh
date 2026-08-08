@@ -632,6 +632,8 @@ restore_iptables() {
         return 0
     fi
 
+    local restored=0
+
     # Stage 1: always flush and reset policies — guarantees a working baseline
     # regardless of backup state. Without this, ip6tables DROP policies set by
     # apply_iptables persist after ip6tables -F (which only flushes rules).
@@ -642,18 +644,31 @@ restore_iptables() {
     ip6tables -P FORWARD ACCEPT
     echo -e "${YELLOW}[i] Rules flushed, policies reset to ACCEPT.${RESET}"
 
-    # Stage 2: try to restore any custom pre-Tor rules from backup.
+    # Stage 2: try to restore any custom pre-Tor rules from backup. Each
+    # family reports separately so a failure is not silently absorbed.
     if [[ -f "$IPTABLES_BACKUP" ]]; then
-        iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null \
-            && rm -f "$IPTABLES_BACKUP" \
-            && echo -e "${YELLOW}[i] Custom iptables rules restored.${RESET}" \
-            || echo -e "${YELLOW}[i] No iptables backup to restore.${RESET}"
+        if iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null; then
+            rm -f "$IPTABLES_BACKUP"
+            echo -e "${YELLOW}[i] Custom iptables rules restored.${RESET}"
+        else
+            echo -e "${RED}[✗] FAILED to restore iptables rules from backup.${RESET}"
+            echo -e "    ${RED}Backup kept at ${IPTABLES_BACKUP} for manual restore.${RESET}"
+            restored=1
+        fi
+    else
+        echo -e "${YELLOW}[i] No iptables backup to restore.${RESET}"
     fi
     if [[ -f "$IP6TABLES_BACKUP" ]]; then
-        ip6tables-restore < "$IP6TABLES_BACKUP" 2>/dev/null \
-            && rm -f "$IP6TABLES_BACKUP" \
-            && echo -e "${YELLOW}[i] Custom ip6tables rules restored.${RESET}" \
-            || echo -e "${YELLOW}[i] No ip6tables backup to restore.${RESET}"
+        if ip6tables-restore < "$IP6TABLES_BACKUP" 2>/dev/null; then
+            rm -f "$IP6TABLES_BACKUP"
+            echo -e "${YELLOW}[i] Custom ip6tables rules restored.${RESET}"
+        else
+            echo -e "${RED}[✗] FAILED to restore ip6tables rules from backup.${RESET}"
+            echo -e "    ${RED}Backup kept at ${IP6TABLES_BACKUP} for manual restore.${RESET}"
+            restored=1
+        fi
+    else
+        echo -e "${YELLOW}[i] No ip6tables backup to restore.${RESET}"
     fi
 
     # Flush conntrack table to remove stale NAT entries that could still
@@ -662,6 +677,8 @@ restore_iptables() {
     command -v conntrack &>/dev/null \
         && conntrack -F 2>/dev/null \
         || echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
+
+    return $restored
 }
 
 apply_iptables() {
@@ -846,11 +863,21 @@ cmd_stop() {
     require_init
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
-    restore_iptables
+    # 0 = firewall fully restored, 1 = one or both rule restores failed.
+    # A failed restore must not be announced as a success below.
+    local fw_restored=0
+    restore_iptables || fw_restored=1
     fix_dns_stop
     service_tor_stop
-    echo -e "${GREEN}[✓] Tor stopped.${RESET}"
+    echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
     cleanup_torrc
+
+    if [[ $fw_restored -ne 0 ]]; then
+        echo -e "\n${RED}${BOLD}[✗] Firewall rules could NOT be fully restored.${RESET}"
+        echo -e "    ${RED}Your system may be missing its custom firewall rules.${RESET}"
+        echo -e "    ${RED}Restore manually from the backups listed above (${IPTABLES_BACKUP} / ${IP6TABLES_BACKUP}).${RESET}"
+        exit 1
+    fi
 
     echo -e "\n${GREEN}${BOLD}[✓] Normal internet restored.${RESET}\n"
     # The restored DNS resolver (systemd-resolved in particular) can take a
