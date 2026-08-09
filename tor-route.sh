@@ -923,6 +923,13 @@ cmd_stop() {
     check_net_tools iptables ip6tables
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
+    # A Ctrl+C here must not leave the box half-restored (rules flushed but
+    # backups removed, resolv.conf rewritten, Tor stopped). interrupt_unwind
+    # is safe to trigger at any point: its restore steps no-op through their
+    # guards once the backups/state files are gone, so an interrupt between
+    # steps simply finishes the restoration.
+    trap interrupt_unwind INT TERM
+
     # 0 = firewall fully restored, 1 = one or both rule restores failed.
     # A failed restore must not be announced as a success below.
     local fw_restored=0
@@ -931,6 +938,7 @@ cmd_stop() {
     service_tor_stop
     echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
     cleanup_torrc
+    trap - INT TERM
 
     if [[ $fw_restored -ne 0 ]]; then
         echo -e "\n${RED}${BOLD}[✗] Firewall rules could NOT be fully restored.${RESET}"
