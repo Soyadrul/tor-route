@@ -353,7 +353,7 @@ cmd_check() {
         echo -e "  Writable:  $([[ -w "$TORRC" ]] && echo "${GREEN}yes${RESET}" || echo "${RED}no${RESET}")"
         if grep -q "^# --- tor-route.sh start" "$TORRC"; then
             echo -e "  Our block: ${YELLOW}present${RESET}"
-            grep -A999 "^# --- tor-route.sh start" "$TORRC" | grep -B999 "^# --- tor-route.sh end"
+            sed -n '/^# --- tor-route.sh start ---$/,/^# --- tor-route.sh end ---$/p' "$TORRC" | sed 's/^/    /'
         else
             echo -e "  Our block: not present"
         fi
