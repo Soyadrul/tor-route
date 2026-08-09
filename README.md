@@ -78,7 +78,7 @@ The rules apply only to traffic **originating from this machine**. Traffic from 
 
 - **Root / sudo access**
 - `tor`, `iptables` (includes `ip6tables`, `iptables-save` and `ip6tables-save` on most distros), `curl`, `ss` (from `iproute2` / `iproute`)
-- `conntrack-tools` — optional, provides `conntrack` used to flush stale NAT entries on stop
+- `conntrack-tools` — optional, provides `conntrack` used to remove stale NAT entries pointing at Tor's ports on stop
 - A supported init system: systemd, OpenRC, Runit, or SysVinit
 
 > Install the packages with your distro's package manager (e.g. `sudo pacman -S tor iptables curl iproute2 conntrack-tools` on Arch).  `conntrack-tools` is optional; the script works without it.
@@ -173,7 +173,7 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 ### `stop`
 
 1. Detects and displays the init system.
-2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Flushes stale conntrack entries (if `conntrack` is available) that could otherwise redirect new connections to Tor's now-closed ports.
+2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only, so unrelated established connections are left alone.
 3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks DNS resolver units (systemd only; other inits skip this) and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`). If the DNS was never modified, it is left untouched.
 4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 5. Stops the Tor service.
