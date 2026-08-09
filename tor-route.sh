@@ -700,12 +700,18 @@ restore_iptables() {
         echo -e "${YELLOW}[i] No ip6tables backup to restore.${RESET}"
     fi
 
-    # Flush conntrack table to remove stale NAT entries that could still
-    # redirect traffic to Tor's ports (now closed) after rule restoration.
-    echo -e "${YELLOW}[i] Flushing conntrack table (stale NAT entries)...${RESET}"
-    command -v conntrack &>/dev/null \
-        && conntrack -F 2>/dev/null \
-        || echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
+    # Delete conntrack entries that still point at Tor's ports (NAT state
+    # carries the rewrite independently of the current ruleset). Scoped to
+    # the TOR_* ports only: a broad `conntrack -F` would also tear down
+    # every established connection that was never routed through Tor (e.g.
+    # an SSH session calling `stop` itself).
+    echo -e "${YELLOW}[i] Removing conntrack entries for Tor ports...${RESET}"
+    if command -v conntrack &>/dev/null; then
+        conntrack -D -p tcp --dport "$TOR_TRANS_PORT" 2>/dev/null
+        conntrack -D -p udp --dport "$TOR_DNS_PORT" 2>/dev/null
+    else
+        echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
+    fi
 
     return $restored
 }
