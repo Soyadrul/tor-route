@@ -449,7 +449,7 @@ cmd_check() {
 cmd_countries() {
     banner
     echo -e "${CYAN}Supported country codes (ISO 3166-1 alpha-2):${RESET}\n"
-    # Print in tidy columns of 6
+    # Print in tidy columns of 12
     local i=0
     for cc in "${VALID_COUNTRIES[@]}"; do
         printf "  ${BOLD}%s${RESET}" "${cc^^}"
