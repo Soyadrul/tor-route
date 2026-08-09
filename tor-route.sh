@@ -241,8 +241,9 @@ check_dependencies() {
 # Optional args restrict the requirement set (e.g. stop only needs
 # iptables/ip6tables - curl is only used for the post-restore probe).
 check_net_tools() {
-    local missing=() cmd
-    for cmd in "${@:-iptables ip6tables curl ss}"; do
+    local missing=() cmd tools=("$@")
+    [[ ${#tools[@]} -eq 0 ]] && tools=(iptables ip6tables curl ss)
+    for cmd in "${tools[@]}"; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
