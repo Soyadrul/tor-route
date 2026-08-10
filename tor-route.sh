@@ -638,16 +638,14 @@ verify_tor_ports() {
 
 # ── iptables ──────────────────────────────────────────────────────────────────
 save_iptables() {
-    iptables-save  > "$IPTABLES_BACKUP"
-    ip6tables-save > "$IP6TABLES_BACKUP"
-
-    # A failed save (missing tool, error) yields an *empty* file. An empty
-    # backup must not survive: restore_iptables' guard only checks existence,
-    # so an empty file would make `stop` flush all rules and "restore"
-    # nothing. Remove them and abort before any rules are touched.
-    if [[ ! -s "$IPTABLES_BACKUP" || ! -s "$IP6TABLES_BACKUP" ]]; then
+    # A failed save aborts start. A partial backup must not survive: if only
+    # one family was saved, restore_iptables would flush BOTH and restore
+    # just the one - destroying the other family's rules. Delete both files
+    # and abort before any rules are touched. Empty output with exit 0 is a
+    # valid baseline (fresh system, no rules to back up).
+    if ! iptables-save  > "$IPTABLES_BACKUP" || ! ip6tables-save > "$IP6TABLES_BACKUP"; then
         rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
-        echo -e "${RED}[✗] Firewall save failed (backup empty). Aborting - your rules are untouched.${RESET}"
+        echo -e "${RED}[✗] Firewall save failed. Aborting - your rules are untouched.${RESET}"
         return 1
     fi
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
