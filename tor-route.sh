@@ -1087,7 +1087,11 @@ cmd_newnode() {
     old_ip=$(curl -s --max-time 5 -4 https://api.ipify.org 2>/dev/null)
 
     echo -e "  ${YELLOW}Current:${RESET}"; show_ip
-    service_tor_reload
+    if ! service_tor_reload; then
+        cleanup_torrc
+        echo -e "${RED}[✗] Tor reload failed - torrc changes reverted.${RESET}"
+        exit 1
+    fi
 
     # Abort cleanly if the user interrupts the wait (nothing to unwind here -
     # the reload already happened - but the message makes the state clear).
