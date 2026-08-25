@@ -52,6 +52,11 @@ COUNTRY_FILE="/tmp/tor-route-country"
 # RESOLVED_STATE_FILE for the DNS resolver).
 TOR_STATE_FILE="/tmp/tor-route-tor-state"
 
+# Lists the systemd-resolved units that were NOT already masked before
+# `start`, so `stop` only unmasks those; units the user had deliberately
+# masked themselves stay masked after the session.
+RESOLVED_MASK_STATE_FILE="/tmp/tor-route-resolved-mask"
+
 # Advisory lock held by mutating commands (start/stop/newnode) so two
 # overlapping invocations cannot corrupt each other's backups or state.
 COMMAND_LOCK_FILE="/tmp/tor-route.lock"
@@ -394,7 +399,7 @@ cmd_check() {
 
     # ── State files ─────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── State files ─────────────────────────${RESET}"
-    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE; do
+    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE RESOLVED_MASK_STATE_FILE; do
         local path="${!f}"
         if [[ -f "$path" ]]; then
             echo -e "  ${f}:  ${path}  ${GREEN}(exists)${RESET}"
@@ -626,7 +631,19 @@ fix_dns_start() {
     # alive, any DNS query will silently bring systemd-resolved back to life.
     if [[ "$INIT" == "systemd" ]]; then
         echo -e "${YELLOW}[i] Masking DNS resolver units...${RESET}"
+        # Record which units were NOT masked beforehand so `stop` only
+        # unmasks those - a unit the user deliberately masked themselves
+        # must stay masked after the session.
+        local prev
+        : > "$RESOLVED_MASK_STATE_FILE"
         for unit in "${RESOLVED_UNITS[@]}"; do
+            # `is-enabled` prints "masked" for masked units while exiting
+            # non-zero - never append a fallback with || here, or a masked
+            # unit would be captured as "masked"$'\n'"not-found".
+            prev=$(systemctl is-enabled "$unit" 2>/dev/null)
+            if [[ "$prev" != "masked" ]]; then
+                echo "$unit" >> "$RESOLVED_MASK_STATE_FILE"
+            fi
             resolver_mask_now "$unit" 2>/dev/null && \
                 echo -e "    Masked: ${unit}" || \
                 echo -e "    ${YELLOW}(skipped - not found: ${unit})${RESET}"
@@ -650,13 +667,28 @@ fix_dns_stop() {
         return 0
     fi
 
-    # Unmask resolver units (systemd only; other inits skip this)
-    echo -e "${YELLOW}[i] Unmasking DNS resolver units (systemd only)...${RESET}"
-    for unit in "${RESOLVED_UNITS[@]}"; do
-        resolver_unmask "$unit" 2>/dev/null && \
-            echo -e "    Unmasked: ${unit}" || \
-            echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
-    done
+    # Unmask resolver units (systemd only; other inits have none). Only
+    # units that were NOT already masked before `start` get unmasked - see
+    # fix_dns_start. A missing record file means the session was started by
+    # an older script version, so fall back to unmasking everything.
+    if [[ "$INIT" == "systemd" ]]; then
+        echo -e "${YELLOW}[i] Unmasking DNS resolver units...${RESET}"
+        if [[ -f "$RESOLVED_MASK_STATE_FILE" ]]; then
+            while IFS= read -r unit; do
+                [[ -z "$unit" ]] && continue
+                resolver_unmask "$unit" 2>/dev/null && \
+                    echo -e "    Unmasked: ${unit}" || \
+                    echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
+            done < "$RESOLVED_MASK_STATE_FILE"
+        else
+            for unit in "${RESOLVED_UNITS[@]}"; do
+                resolver_unmask "$unit" 2>/dev/null && \
+                    echo -e "    Unmasked: ${unit}" || \
+                    echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
+            done
+        fi
+        rm -f "$RESOLVED_MASK_STATE_FILE"
+    fi
 
     # Restore resolv.conf.
     # Prefer symlink to resolved's live stub (dynamic, updates with network changes)
