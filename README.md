@@ -160,7 +160,7 @@ sudo tor-route stop
 
 1. Validates the optional country code `CC` against the full [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) list.
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country, and saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
-3. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to be ready — either the log reports "Bootstrapped 100%" or the trans proxy port starts listening.
+3. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to be ready — either the log reports "Bootstrapped 100%" or the trans proxy port starts listening. Whether Tor was already running before is recorded to a state file so `stop` can put the service back the way it was found.
 4. Verifies that Tor is actually listening on both expected ports.
 5. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched; empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect and aborts (with a full restore) if they did not — it never claims success while IPv6 could still leak.
 6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
@@ -178,7 +178,7 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only, so unrelated established connections are left alone. Afterwards it verifies the Tor redirect is actually gone; if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions instead of shutting down Tor and black-holing traffic.
 3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks DNS resolver units (systemd only; other inits skip this) and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`). If the DNS was never modified, it is left untouched.
 4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
-5. Stops the Tor service.
+5. Restores the Tor service to how it was found: stopped if Tor wasn't running before `start`, restarted with the original configuration (after the torrc block is removed) if it was.
 6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
@@ -318,6 +318,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 | `/tmp/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
 | `/tmp/tor-route-country` | Records the active exit node country (or `random`) while Tor routing is active |
 | `/tmp/tor-route-resolved-state` | Records whether a DNS resolver was running before `start` |
+| `/tmp/tor-route-tor-state` | Records whether the Tor service was running before `start` |
 
 ---
 

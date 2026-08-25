@@ -47,6 +47,11 @@ RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 # can read it back without re-parsing torrc.
 COUNTRY_FILE="/tmp/tor-route-country"
 
+# Records whether the Tor service itself was running before `start` took it
+# over, so `stop`/unwind can put it back the way it was found (mirrors
+# RESOLVED_STATE_FILE for the DNS resolver).
+TOR_STATE_FILE="/tmp/tor-route-tor-state"
+
 # Advisory lock held by mutating commands (start/stop/newnode) so two
 # overlapping invocations cannot corrupt each other's backups or state.
 COMMAND_LOCK_FILE="/tmp/tor-route.lock"
@@ -389,7 +394,7 @@ cmd_check() {
 
     # ── State files ─────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── State files ─────────────────────────${RESET}"
-    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE; do
+    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE; do
         local path="${!f}"
         if [[ -f "$path" ]]; then
             echo -e "  ${f}:  ${path}  ${GREEN}(exists)${RESET}"
@@ -542,6 +547,27 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
+# Put the Tor service back the way `start` found it. If Tor was already
+# running before (recorded in TOR_STATE_FILE), clean torrc first and restart
+# the service so it comes back on the user's own configuration; if it was
+# not running, just stop it. Consumes the state file either way; a missing
+# file defaults to "not running", i.e. the old stop-always behaviour.
+restore_tor_service() {
+    local was_running
+    was_running=$(cat "$TOR_STATE_FILE" 2>/dev/null)
+    rm -f "$TOR_STATE_FILE"
+    if [[ "$was_running" == "yes" ]]; then
+        echo -e "${YELLOW}[i] Tor was running before - restoring it with the original config...${RESET}"
+        cleanup_torrc
+        service_tor_restart
+        echo -e "${GREEN}[✓] Tor service restored.${RESET}"
+    else
+        service_tor_stop
+        cleanup_torrc
+        echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
+    fi
+}
+
 # Fired when the Tor redirect rules are still live but the firewall backups
 # are gone (deleted externally mid-session): restore_iptables no-ops through
 # its guard, so stopping Tor here would leave all traffic pointed at a dead
@@ -571,8 +597,7 @@ interrupt_unwind() {
         exit 1
     fi
     fix_dns_stop
-    service_tor_stop
-    cleanup_torrc
+    restore_tor_service
     exit 1
 }
 
@@ -891,6 +916,16 @@ cmd_start() {
     trap interrupt_unwind INT TERM
     configure_torrc "$country"
 
+    # Record whether the Tor service was running before we take it over, so
+    # stop/unwind can put it back the way it was found (mirrors how the DNS
+    # resolver state is tracked in RESOLVED_STATE_FILE).
+    if service_tor_running; then
+        echo "yes" > "$TOR_STATE_FILE"
+        echo -e "${YELLOW}[i] Tor was already running - it will be restored on stop/unwind.${RESET}"
+    else
+        echo "no" > "$TOR_STATE_FILE"
+    fi
+
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
     service_tor_restart
     echo -n "    Bootstrapping"
@@ -903,21 +938,21 @@ cmd_start() {
 
     if ! service_tor_running; then
         echo -e "${RED}[✗] Tor failed to start. Check Tor logs for errors (${BOLD}sudo ${0##*/} status${RESET}).${RESET}"
-        fix_dns_stop; cleanup_torrc; exit 1
+        fix_dns_stop; restore_tor_service; exit 1
     fi
     echo -e "${GREEN}[✓] Tor is running.${RESET}\n"
 
     if ! verify_tor_ports; then
-        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
+        fix_dns_stop; restore_tor_service; exit 1
     fi
 
     if ! save_iptables; then
-        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
+        fix_dns_stop; restore_tor_service; exit 1
     fi
     if ! apply_iptables; then
         # Rules were partially applied - restore what we saved, then unwind.
         restore_iptables
-        fix_dns_stop; cleanup_torrc; service_tor_stop; exit 1
+        fix_dns_stop; restore_tor_service; exit 1
     fi
 
     # Swap resolv.conf only once the redirect rules exist, so the system's
@@ -986,9 +1021,7 @@ cmd_stop() {
         exit 1
     fi
     fix_dns_stop
-    service_tor_stop
-    echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
-    cleanup_torrc
+    restore_tor_service
     trap - INT TERM
 
     if [[ $fw_restored -ne 0 ]]; then
