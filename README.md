@@ -119,6 +119,8 @@ sudo tor-route <command>
 | `countries` | Print a full list of all supported country codes |
 | `check` | Run a thorough dry-run system check (safe to paste in GitHub issues) |
 
+The mutating commands (`start`, `stop`, `newnode`) are serialized with an advisory lock — a second one refuses to run while another is still in progress. Read-only commands (`status`, `check`, `countries`) can be run at any time, including mid-`start`.
+
 ### Examples
 
 ```bash

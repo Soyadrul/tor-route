@@ -47,6 +47,10 @@ RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
 # can read it back without re-parsing torrc.
 COUNTRY_FILE="/tmp/tor-route-country"
 
+# Advisory lock held by mutating commands (start/stop/newnode) so two
+# overlapping invocations cannot corrupt each other's backups or state.
+COMMAND_LOCK_FILE="/tmp/tor-route.lock"
+
 # Populated by require_init() based on the detected init system.
 # For systemd: socket units must be masked alongside the service to prevent
 # socket activation from silently reviving systemd-resolved.
@@ -250,6 +254,26 @@ check_net_tools() {
         echo -e "${RED}[✗] Missing: ${missing[*]}${RESET}"
         echo -e "    Install the missing packages using your distro's package manager."
         exit 1
+    fi
+}
+
+# Serialise mutating commands (start/stop/newnode). They all rewrite the same
+# state - firewall, resolv.conf, torrc, services - and `start`'s "already
+# active?" gate runs long before the rules appear, so two overlapping runs
+# could both pass it and one would back up the other's Tor-state rules for a
+# later stop to restore as if they were pre-Tor state. flock releases the
+# lock automatically when the process dies, so stale locks cannot happen.
+# Read-only commands (status/check/countries) are deliberately not locked.
+acquire_command_lock() {
+    exec 9>>"$COMMAND_LOCK_FILE"
+    if command -v flock &>/dev/null; then
+        if ! flock -n 9; then
+            echo -e "${RED}[✗] Another tor-route command is already running.${RESET}"
+            echo -e "    ${YELLOW}Wait for it to finish, then try again.${RESET}"
+            exit 1
+        fi
+    else
+        echo -e "${YELLOW}[!] flock not found - running WITHOUT protection against concurrent runs.${RESET}"
     fi
 }
 
@@ -835,6 +859,7 @@ show_ip() {
 cmd_start() {
     banner
     require_root start
+    acquire_command_lock
     require_init
     check_dependencies
 
@@ -933,6 +958,7 @@ cmd_start() {
 cmd_stop() {
     banner
     require_root stop
+    acquire_command_lock
     require_init
     # stop must always be able to run even if Tor was uninstalled; only the
     # restore tools are strictly required (curl is used by the verification
@@ -1076,6 +1102,7 @@ cmd_status() {
 cmd_newnode() {
     banner
     require_root newnode
+    acquire_command_lock
     require_init
     check_net_tools
 
