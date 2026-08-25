@@ -789,14 +789,19 @@ restore_iptables() {
     fi
 
     # Delete conntrack entries that still point at Tor's ports (NAT state
-    # carries the rewrite independently of the current ruleset). Scoped to
-    # the TOR_* ports only: a broad `conntrack -F` would also tear down
-    # every established connection that was never routed through Tor (e.g.
-    # an SSH session calling `stop` itself).
+    # carries the rewrite independently of the current ruleset). Match the
+    # REPLY tuple: REDIRECT rewrites connections so Tor's local port becomes
+    # the reply SOURCE port, while the original destination port stays
+    # whatever the application dialed (443, 53, ...) - plain --dport would
+    # therefore match almost nothing and stale entries would survive until
+    # they expire. Still scoped to the TOR_* ports only: a broad
+    # `conntrack -F` would also tear down every established connection that
+    # was never routed through Tor (e.g. an SSH session calling `stop`
+    # itself).
     echo -e "${YELLOW}[i] Removing conntrack entries for Tor ports...${RESET}"
     if command -v conntrack &>/dev/null; then
-        conntrack -D -p tcp --dport "$TOR_TRANS_PORT" 2>/dev/null
-        conntrack -D -p udp --dport "$TOR_DNS_PORT" 2>/dev/null
+        conntrack -D -p tcp --reply-port-src "$TOR_TRANS_PORT" 2>/dev/null
+        conntrack -D -p udp --reply-port-src "$TOR_DNS_PORT" 2>/dev/null
     else
         echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
     fi
