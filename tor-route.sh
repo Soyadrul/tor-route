@@ -705,16 +705,36 @@ verify_tor_ports() {
 }
 
 # ── iptables ──────────────────────────────────────────────────────────────────
+# True when the kernel actually exposes an IPv6 stack. With ipv6.disable=1
+# (or the module blacklisted) ip6tables cannot even list rules: there is
+# nothing to block and nothing that could leak, so every IPv6 step becomes a
+# no-op instead of aborting `start`.
+ipv6_available() {
+    ip6tables -L -n &>/dev/null
+}
+
 save_iptables() {
     # A failed save aborts start. A partial backup must not survive: if only
     # one family was saved, restore_iptables would flush BOTH and restore
     # just the one - destroying the other family's rules. Delete both files
     # and abort before any rules are touched. Empty output with exit 0 is a
     # valid baseline (fresh system, no rules to back up).
-    if ! iptables-save  > "$IPTABLES_BACKUP" || ! ip6tables-save > "$IP6TABLES_BACKUP"; then
+    if ! iptables-save > "$IPTABLES_BACKUP"; then
         rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
         echo -e "${RED}[✗] Firewall save failed. Aborting - your rules are untouched.${RESET}"
         return 1
+    fi
+    # An absent IPv6 stack has no rules to back up and cannot leak - skip the
+    # v6 save instead of failing start over it.
+    if ipv6_available; then
+        if ! ip6tables-save > "$IP6TABLES_BACKUP"; then
+            rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
+            echo -e "${RED}[✗] Firewall save failed. Aborting - your rules are untouched.${RESET}"
+            return 1
+        fi
+    else
+        rm -f "$IP6TABLES_BACKUP"
+        echo -e "${YELLOW}[i] IPv6 not available - skipping IPv6 backup (nothing to block or restore).${RESET}"
     fi
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
 }
@@ -732,11 +752,13 @@ restore_iptables() {
     # Stage 1: always flush and reset policies — guarantees a working baseline
     # regardless of backup state. Without this, ip6tables DROP policies set by
     # apply_iptables persist after ip6tables -F (which only flushes rules).
-    iptables  -F; iptables  -t nat -F
-    ip6tables -F; ip6tables -t nat -F
-    ip6tables -P INPUT ACCEPT
-    ip6tables -P OUTPUT ACCEPT
-    ip6tables -P FORWARD ACCEPT
+    iptables -F; iptables -t nat -F
+    if ipv6_available; then
+        ip6tables -F; ip6tables -t nat -F
+        ip6tables -P INPUT ACCEPT
+        ip6tables -P OUTPUT ACCEPT
+        ip6tables -P FORWARD ACCEPT
+    fi
     echo -e "${YELLOW}[i] Rules flushed, policies reset to ACCEPT.${RESET}"
 
     # Stage 2: try to restore any custom pre-Tor rules from backup. Each
@@ -822,21 +844,28 @@ apply_iptables() {
     done
     iptables -A OUTPUT -p udp -j DROP
 
-    # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack sites)
-    ip6tables -P INPUT   DROP
-    ip6tables -P OUTPUT  DROP
-    ip6tables -P FORWARD DROP
+    # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack
+    # sites). On kernels without an IPv6 stack there is nothing to leak -
+    # skip instead of failing.
+    if ipv6_available; then
+        ip6tables -P INPUT   DROP
+        ip6tables -P OUTPUT  DROP
+        ip6tables -P FORWARD DROP
 
-    # Verify the policies actually took effect. If ip6tables failed silently
-    # (kernel IPv6 disabled, module missing), IPv6 traffic would keep flowing
-    # unproxied - a leak. Abort so `start` never claims success over an
-    # enabled IPv6 stack.
-    if ! ip6tables -L OUTPUT -n 2>/dev/null | grep -q "policy DROP"; then
-        echo -e "${RED}[✗] Could not apply IPv6 DROP policies - IPv6 would stay enabled and leak. Check that the ipv6 kernel module is loaded.${RESET}"
-        return 1
+        # Verify the policies actually took effect. If ip6tables failed
+        # silently here despite a working stack, IPv6 traffic would keep
+        # flowing unproxied - a leak. Abort so `start` never claims success
+        # over an enabled IPv6 stack.
+        if ! ip6tables -L OUTPUT -n 2>/dev/null | grep -q "policy DROP"; then
+            echo -e "${RED}[✗] Could not apply IPv6 DROP policies - IPv6 would stay enabled and leak. Check that the ipv6 kernel module is loaded.${RESET}"
+            return 1
+        fi
+        echo -e "${YELLOW}[i] IPv6 blocked.${RESET}"
+    else
+        echo -e "${YELLOW}[i] IPv6 not available (disabled in kernel?) - skipping IPv6 blocking, nothing to leak.${RESET}"
     fi
 
-    echo -e "${YELLOW}[i] IPv6 blocked. Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
+    echo -e "${YELLOW}[i] Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
     return 0
 }
 

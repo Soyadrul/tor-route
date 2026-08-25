@@ -72,6 +72,8 @@ With tor-route:
 
 The rules apply only to traffic **originating from this machine**. Traffic from other devices on your local network is not routed through Tor.
 
+If IPv6 is disabled in the kernel (e.g. the machine was booted with `ipv6.disable=1`), `tor-route` detects that there is no IPv6 stack and simply skips all IPv6 handling — there is nothing left through which IPv6 could leak.
+
 ---
 
 ## Requirements
