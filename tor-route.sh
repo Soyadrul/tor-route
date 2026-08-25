@@ -518,6 +518,19 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
+# Fired when the Tor redirect rules are still live but the firewall backups
+# are gone (deleted externally mid-session): restore_iptables no-ops through
+# its guard, so stopping Tor here would leave all traffic pointed at a dead
+# transparent proxy. Print exact manual recovery steps instead of mutating
+# anything further or claiming success.
+print_manual_rule_recovery() {
+    echo -e "\n${RED}${BOLD}[✗] Tor routing rules are still active but the firewall backups are missing.${RESET}"
+    echo -e "    ${RED}Stopping Tor now would black-hole your traffic, so it was left running.${RESET}"
+    echo -e "    ${YELLOW}Remove the leftover rules manually, then run ${BOLD}stop${RESET}${YELLOW} again:${RESET}"
+    echo -e "      ${BOLD}iptables -t nat -F OUTPUT && iptables -F OUTPUT${RESET}"
+    echo -e "      ${BOLD}ip6tables -P INPUT ACCEPT && ip6tables -P OUTPUT ACCEPT && ip6tables -P FORWARD ACCEPT${RESET}"
+}
+
 # Unwind hook for `start` when the user interrupts it at any point after the
 # script starts mutating the system (torrc, Tor, firewall, DNS). Leaves the
 # system exactly as it was: rules restored, DNS restored, Tor stopped, torrc
@@ -527,6 +540,12 @@ interrupt_unwind() {
     echo ""
     echo -e "${RED}[✗] Interrupted. Restoring normal internet...${RESET}"
     restore_iptables
+    # If the rules survived the restore, the backups were deleted out from
+    # under the session - tearing down Tor now would black-hole everything.
+    if is_routing_active; then
+        print_manual_rule_recovery
+        exit 1
+    fi
     fix_dns_stop
     service_tor_stop
     cleanup_torrc
@@ -932,6 +951,14 @@ cmd_stop() {
     # A failed restore must not be announced as a success below.
     local fw_restored=0
     restore_iptables || fw_restored=1
+    # Verify the rules actually went away before tearing down Tor. If they
+    # survived (backups deleted externally mid-session), stopping Tor would
+    # black-hole all traffic while the script claimed success.
+    if is_routing_active; then
+        trap - INT TERM
+        print_manual_rule_recovery
+        exit 1
+    fi
     fix_dns_stop
     service_tor_stop
     echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
