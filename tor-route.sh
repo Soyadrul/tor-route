@@ -747,10 +747,11 @@ fix_dns_stop() {
 verify_tor_ports() {
     echo -e "${CYAN}[i] Verifying Tor port bindings...${RESET}"
     local ok=1
-    ss -tlnp 2>/dev/null | grep -q ":${TOR_TRANS_PORT}" \
+    # Use a trailing word boundary so 9040 does not match 90400 etc.
+    ss -tlnp 2>/dev/null | grep -q ":${TOR_TRANS_PORT}\b" \
         && echo -e "    TransPort ${TOR_TRANS_PORT}: ${GREEN}Listening ✓${RESET}" \
         || { echo -e "    TransPort ${TOR_TRANS_PORT}: ${RED}NOT listening ✗${RESET}"; ok=0; }
-    ss -ulnp 2>/dev/null | grep -q ":${TOR_DNS_PORT}" \
+    ss -ulnp 2>/dev/null | grep -q ":${TOR_DNS_PORT}\b" \
         && echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${GREEN}Listening ✓${RESET}" \
         || { echo -e "    DNSPort   ${TOR_DNS_PORT}:  ${RED}NOT listening ✗${RESET}"; ok=0; }
     [[ $ok -eq 0 ]] && {
@@ -956,9 +957,10 @@ apply_iptables() {
 
 # 0 if the Tor transparent redirect is currently present in iptables,
 # non-zero otherwise. Also used by `status`/`check`/`start` as the canonical
-# "is Tor routing active?" test.
+# "is Tor routing active?" test. The -n flag avoids slow reverse DNS
+# lookups that plain -L would trigger.
 is_routing_active() {
-    iptables -t nat -L OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"
+    iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"
 }
 
 # ── Public IP display ─────────────────────────────────────────────────────────
