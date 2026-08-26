@@ -1240,8 +1240,6 @@ cmd_newnode() {
             exit 1
         }
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
-        # Update torrc with the new country preference and reload Tor
-        configure_torrc "$country"
     else
         # If no country given, check if one was previously pinned and clear it
         local prev
@@ -1251,7 +1249,6 @@ cmd_newnode() {
         else
             echo -e "${CYAN}[→] Requesting a new random Tor circuit (new exit node = new IP)...${RESET}\n"
         fi
-        configure_torrc ""
     fi
 
     # SIGHUP = reload config and rebuild all circuits.
@@ -1262,14 +1259,21 @@ cmd_newnode() {
     old_ip=$(curl -s --max-time 5 -4 https://api.ipify.org 2>/dev/null)
 
     echo -e "  ${YELLOW}Current:${RESET}"; show_ip
+
+    # From the torrc write until the reload completes, an interrupt must
+    # revert the edit (same contract as the reload-failure path below).
+    # Before this point nothing has been modified yet, so no trap is needed.
+    trap 'cleanup_torrc; echo ""; echo -e "${RED}[✗] Interrupted - torrc changes reverted, reload not sent.${RESET}"; exit 1' INT TERM
+    configure_torrc "$country"
+
     if ! service_tor_reload; then
         cleanup_torrc
         echo -e "${RED}[✗] Tor reload failed - torrc changes reverted.${RESET}"
         exit 1
     fi
 
-    # Abort cleanly if the user interrupts the wait (nothing to unwind here -
-    # the reload already happened - but the message makes the state clear).
+    # Reload done - there is nothing left to revert; from here an interrupt
+    # merely abandons the wait for the new circuit.
     trap 'echo ""; echo -e "${RED}[✗] Interrupted - new circuit request aborted.${RESET}"; exit 1' INT TERM
 
     if [[ -n "$old_ip" ]]; then
