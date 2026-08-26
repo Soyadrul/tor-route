@@ -765,19 +765,28 @@ save_iptables() {
     # just the one - destroying the other family's rules. Delete both files
     # and abort before any rules are touched. Empty output with exit 0 is a
     # valid baseline (fresh system, no rules to back up).
-    if ! iptables-save > "$IPTABLES_BACKUP"; then
-        rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
+    #
+    # Each dump lands in a .tmp sibling first and is renamed into place:
+    # rename(2) is atomic within /tmp, so an interrupt mid-save can never
+    # leave a truncated file behind that restore_iptables would mistake for
+    # a complete backup. Stray .tmp files are inert - restore only ever
+    # reads the final names.
+    rm -f "$IPTABLES_BACKUP.tmp" "$IP6TABLES_BACKUP.tmp"
+    if ! iptables-save > "$IPTABLES_BACKUP.tmp"; then
+        rm -f "$IPTABLES_BACKUP.tmp" "$IP6TABLES_BACKUP.tmp"
         echo -e "${RED}[✗] Firewall save failed. Aborting - your rules are untouched.${RESET}"
         return 1
     fi
+    mv "$IPTABLES_BACKUP.tmp" "$IPTABLES_BACKUP"
     # An absent IPv6 stack has no rules to back up and cannot leak - skip the
     # v6 save instead of failing start over it.
     if ipv6_available; then
-        if ! ip6tables-save > "$IP6TABLES_BACKUP"; then
-            rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP"
+        if ! ip6tables-save > "$IP6TABLES_BACKUP.tmp"; then
+            rm -f "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP.tmp" "$IPTABLES_BACKUP.tmp"
             echo -e "${RED}[✗] Firewall save failed. Aborting - your rules are untouched.${RESET}"
             return 1
         fi
+        mv "$IP6TABLES_BACKUP.tmp" "$IP6TABLES_BACKUP"
     else
         rm -f "$IP6TABLES_BACKUP"
         echo -e "${YELLOW}[i] IPv6 not available - skipping IPv6 backup (nothing to block or restore).${RESET}"
