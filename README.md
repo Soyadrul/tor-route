@@ -79,7 +79,7 @@ If IPv6 is disabled in the kernel (e.g. the machine was booted with `ipv6.disabl
 ## Requirements
 
 - **Root / sudo access**
-- `tor`, `iptables` (includes `ip6tables`, `iptables-save` and `ip6tables-save` on most distros), `curl`, `ss` (from `iproute2` / `iproute`)
+- `tor`, `iptables` (includes `ip6tables`, `iptables-save`/`ip6tables-save` and `iptables-restore`/`ip6tables-restore` on most distros), `curl`, `ss` (from `iproute2` / `iproute`)
 - `conntrack-tools` — optional, provides `conntrack` used to remove stale NAT entries pointing at Tor's ports on stop
 - A supported init system: systemd, OpenRC, Runit, or SysVinit
 

@@ -1093,7 +1093,13 @@ cmd_stop() {
     # stop must always be able to run even if Tor was uninstalled; only the
     # restore tools are strictly required (curl is used by the verification
     # probe and show_ip below, but a missing curl must not block restoring).
-    check_net_tools iptables ip6tables
+    # iptables-restore/ip6tables-restore are demanded only when a matching
+    # backup actually exists - catching the gap upfront instead of mid-
+    # restore, while exotic systems with no backups at all can still stop.
+    local need=(iptables ip6tables)
+    [[ -f "$IPTABLES_BACKUP" ]] && need+=(iptables-restore)
+    [[ -f "$IP6TABLES_BACKUP" ]] && need+=(ip6tables-restore)
+    check_net_tools "${need[@]}"
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
     # A Ctrl+C here must not leave the box half-restored (rules flushed but
