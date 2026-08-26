@@ -957,15 +957,17 @@ show_ip() {
     ip=$(curl -s --max-time 12 -4 https://api.ipify.org 2>/dev/null)
     if [[ -n "$ip" ]]; then
         echo -e "    IPv4: ${BOLD}${ip}${RESET}"
-        # Geo-IP lookup: query ip-api.com for country info about the current IP.
-        # This tells you which country the exit node appears to be in.
-        # We use the free JSON endpoint - no API key required.
+        # Geo-IP lookup: ask which country/ISP the current (exit) IP belongs
+        # to, over HTTPS - a plaintext query would let anyone on the path
+        # (including the exit node itself) see or tamper with the answer.
+        # ipwho.is serves the free JSON endpoint without an API key
+        # (ip-api.com's free tier is HTTP-only).
         local geo
-        geo=$(curl -s --max-time 8 "http://ip-api.com/json/${ip}?fields=country,countryCode,isp" 2>/dev/null)
+        geo=$(curl -s --max-time 8 "https://ipwho.is/${ip}" 2>/dev/null)
         if [[ -n "$geo" ]]; then
             local country_name country_code isp
             country_name=$(echo "$geo" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
-            country_code=$(echo "$geo" | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
+            country_code=$(echo "$geo" | grep -o '"country_code":"[^"]*"' | cut -d'"' -f4)
             isp=$(echo "$geo" | grep -o '"isp":"[^"]*"' | cut -d'"' -f4)
             [[ -n "$country_name" ]] && echo -e "    Country: ${BOLD}${country_name} (${country_code})${RESET}"
             [[ -n "$isp"          ]] && echo -e "    ISP/Org: ${BOLD}${isp}${RESET}"
