@@ -1037,22 +1037,24 @@ cmd_start() {
         echo -e "${CYAN}[→] Starting Tor routing with random exit node...${RESET}\n"
     fi
 
-    # From here on the script mutates the system (torrc, Tor, firewall, DNS).
-    # An interrupt must unwind all of it. The trap is safe to install early:
-    # restore_iptables and fix_dns_stop no-op via their guards when nothing
-    # was saved yet, so a Ctrl+C during bootstrap leaves everything untouched.
-    trap interrupt_unwind INT TERM
-    configure_torrc "$country"
-
-    # Record whether the Tor service was running before we take it over, so
-    # stop/unwind can put it back the way it was found (mirrors how the DNS
-    # resolver state is tracked in RESOLVED_STATE_FILE).
+    # Record whether the Tor service was running before we touch anything,
+    # so a Ctrl+C in the tiny window before the unwind trap is installed
+    # still restores correctly. Mirrors how the DNS resolver state is tracked
+    # in RESOLVED_STATE_FILE.
     if service_tor_running; then
         echo "yes" > "$TOR_STATE_FILE"
         echo -e "${YELLOW}[i] Tor was already running - it will be restored on stop/unwind.${RESET}"
     else
         echo "no" > "$TOR_STATE_FILE"
     fi
+    chmod 600 "$TOR_STATE_FILE" 2>/dev/null || true
+
+    # From here on the script mutates the system (torrc, Tor, firewall, DNS).
+    # An interrupt must unwind all of it. The trap is safe to install early:
+    # restore_iptables and fix_dns_stop no-op via their guards when nothing
+    # was saved yet, so a Ctrl+C during bootstrap leaves everything untouched.
+    trap interrupt_unwind INT TERM
+    configure_torrc "$country"
 
     echo -e "${YELLOW}[i] Starting Tor...${RESET}"
     service_tor_restart
