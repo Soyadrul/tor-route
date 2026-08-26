@@ -215,7 +215,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **Tor user** — which system usernames were tried, which one matched
 - **Tor service** — running/stopped, listening TCP and DNS ports
 - **torrc** — path, permissions, and whether the script's config block is present
-- **State files** — which of the 5 backup/state files exist
+- **State files** — which of the 7 backup/state files exist (firewall, DNS, country, service and mask state)
 - **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy
 - **DNS** — resolv.conf type (symlink/regular file), line count, nameserver count (no actual addresses)
 - **Tor log** — last 5 lines of journal/log output (a missing log is a note, not a failed check)
@@ -307,6 +307,14 @@ The script prefers a symlink to systemd-resolved's live stub-resolv.conf over a 
 
 Tor may reuse the same exit node for a short period. Wait 15 seconds and try again. The Tor network does not guarantee a different country or IP on every circuit rebuild.
 
+**Another tor-route command is already running**
+
+The mutating commands (`start`, `stop`, `newnode`) are serialized with a lock. A second one prints `[✗] Another tor-route command is already running.` — wait for the first to finish, then retry. A stray symlink at `/tmp/tor-route.lock` is refused for security; remove it manually if you created it.
+
+**Geo lookup shows the wrong country**
+
+`status` (and the `show_ip` helper) fetches your public IP from `api.ipify.org` and then resolves the country/ISP via `https://ipwho.is/<ip>` — when routing is active that second request also goes through Tor, so the lookup sees the *exit* IP. When routing is off it goes direct and sees your real IP. No extra data is sent; only the IP already displayed is looked up.
+
 ---
 
 ## File locations
@@ -322,6 +330,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 | `/tmp/tor-route-resolved-state` | Records whether a DNS resolver was running before `start` |
 | `/tmp/tor-route-tor-state` | Records whether the Tor service was running before `start` |
 | `/tmp/tor-route-resolved-mask` | Lists the resolved units `start` masked itself (previously-masked units are not listed) |
+| `/tmp/tor-route.lock` | Advisory lock held while `start`/`stop`/`newnode` run (prevents concurrent corruption; auto-released on exit) |
 
 ---
 
@@ -329,7 +338,8 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 - This script is intended for **personal privacy use** on your own machine.
 - Only traffic originating from this machine is routed through Tor — other devices on your local network are not covered.
-- The firewall and `resolv.conf` backups written to `/tmp` during a session are created root-only (`0600`), since they reveal parts of your network topology.
+- The firewall and `resolv.conf` backups written to `/tmp` during a session are created root-only (`0600`), since they reveal parts of your network topology. The lock file is also created `0600` and a pre-existing symlink at that path is refused.
+- The country/ISP line in `status` comes from a lookup of the IP already shown (`https://ipwho.is/<ip>`). When routing is active the lookup itself goes through Tor, so the service only ever sees the exit IP; when routing is off it goes direct. No other data is sent.
 - Using Tor may be restricted or illegal in some countries — check your local laws.
 - For maximum anonymity, use the [Tor Browser](https://www.torproject.org/download/) which includes additional fingerprinting protections that this script cannot provide.
 
