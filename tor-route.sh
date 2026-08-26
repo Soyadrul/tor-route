@@ -446,9 +446,12 @@ cmd_check() {
     else
         echo -e "  resolv.conf:  ${RED}missing${RESET}"
     fi
+    # grep -c always prints a count (0 included); only an unreadable file
+    # yields empty output, so no "|| echo 0" here - that would double the
+    # zero into "0\n0".
     local ns_count
-    ns_count=$(grep -c '^nameserver' /etc/resolv.conf 2>/dev/null || echo 0)
-    echo -e "  Nameservers:  ${ns_count} entries"
+    ns_count=$(grep -c '^nameserver' /etc/resolv.conf 2>/dev/null)
+    echo -e "  Nameservers:  ${ns_count:-0} entries"
     echo -e "  Backup:       $( [[ -f "$RESOLV_BACKUP" ]] && echo "${GREEN}exists${RESET}" || echo 'not present' )"
     if [[ "$INIT" == "systemd" ]] && [[ -f "$RESOLVED_STATE_FILE" ]]; then
         echo -e "  Resolved:     was $(cat "$RESOLVED_STATE_FILE")"
