@@ -958,6 +958,11 @@ cmd_start() {
     banner
     require_root start
     acquire_command_lock
+    if [[ $# -gt 2 ]]; then
+        echo -e "${RED}[✗] Unexpected argument(s): ${*:3}${RESET}"
+        echo -e "    Usage: sudo ${0##*/} start [CC]"
+        exit 1
+    fi
     require_init
     check_dependencies
 
@@ -972,11 +977,18 @@ cmd_start() {
     # Parse optional country code argument ($2 when called as `start CC`)
     local country=""
     if [[ -n "${2:-}" ]]; then
-        country=$(validate_country "$2") || {
-            echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
-            echo -e "    Run  ${BOLD}sudo ${0##*/} countries${RESET}  to see all valid codes."
-            exit 1
-        }
+        case "${2,,}" in
+            h|help|-h|--help)
+                echo -e "Usage: sudo ${0##*/} start [CC]"
+                echo -e "       CC = optional 2-letter country code to pin the exit node (list: sudo ${0##*/} countries)"
+                exit 0 ;;
+            *)
+                country=$(validate_country "$2") || {
+                    echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
+                    echo -e "    Run  ${BOLD}sudo ${0##*/} countries${RESET}  to see all valid codes."
+                    exit 1
+                } ;;
+        esac
         echo -e "${CYAN}[→] Starting Tor routing with exit node in: ${BOLD}${country^^}${RESET}\n"
     else
         echo -e "${CYAN}[→] Starting Tor routing with random exit node...${RESET}\n"
@@ -1215,6 +1227,11 @@ cmd_newnode() {
     banner
     require_root newnode
     acquire_command_lock
+    if [[ $# -gt 2 ]]; then
+        echo -e "${RED}[✗] Unexpected argument(s): ${*:3}${RESET}"
+        echo -e "    Usage: sudo ${0##*/} newnode [CC]"
+        exit 1
+    fi
     require_init
     check_net_tools
 
@@ -1234,11 +1251,18 @@ cmd_newnode() {
     # Parse optional country code argument
     local country=""
     if [[ -n "${2:-}" ]]; then
-        country=$(validate_country "$2") || {
-            echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
-            echo -e "    Run  ${BOLD}sudo ${0##*/} countries${RESET}  to see all valid codes."
-            exit 1
-        }
+        case "${2,,}" in
+            h|help|-h|--help)
+                echo -e "Usage: sudo ${0##*/} newnode [CC]"
+                echo -e "       CC = optional 2-letter country code to pin the exit node (list: sudo ${0##*/} countries)"
+                exit 0 ;;
+            *)
+                country=$(validate_country "$2") || {
+                    echo -e "${RED}[✗] Unknown country code: '${2^^}'.${RESET}"
+                    echo -e "    Run  ${BOLD}sudo ${0##*/} countries${RESET}  to see all valid codes."
+                    exit 1
+                } ;;
+        esac
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
     else
         # If no country given, check if one was previously pinned and clear it
