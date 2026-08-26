@@ -675,19 +675,22 @@ fix_dns_start() {
         done
     fi
 
-    # Write a plain resolv.conf pointing to 127.0.0.1
-    # iptables will intercept port 53 queries there and forward them to
-    # Tor's DNS listener on port ${TOR_DNS_PORT}.
-    rm -f /etc/resolv.conf
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf
+    # Write a plain resolv.conf pointing to 127.0.0.1. Use a tmp file and
+    # rename so a crash between rm and echo cannot leave the system with no
+    # resolv.conf at all. iptables will intercept port 53 queries there and
+    # forward them to Tor's DNS listener on port ${TOR_DNS_PORT}.
+    echo "nameserver 127.0.0.1" > /etc/resolv.conf.tmp
+    mv -f /etc/resolv.conf.tmp /etc/resolv.conf
     echo -e "${GREEN}[✓] /etc/resolv.conf → 127.0.0.1 (iptables will forward to Tor:${TOR_DNS_PORT}).${RESET}"
 }
 
 fix_dns_stop() {
     # If fix_dns_start never ran (e.g. `start` failed before touching DNS),
     # there is nothing to restore - the 1.1.1.1 fallback below would
-    # otherwise clobber an untouched resolv.conf.
-    if [[ ! -f "$RESOLVED_STATE_FILE" && ! -f "$RESOLV_BACKUP" ]]; then
+    # otherwise clobber an untouched resolv.conf. Also consider the mask
+    # state file, which can exist alone if start was interrupted right after
+    # masking.
+    if [[ ! -f "$RESOLVED_STATE_FILE" && ! -f "$RESOLV_BACKUP" && ! -f "$RESOLVED_MASK_STATE_FILE" ]]; then
         echo -e "${YELLOW}[i] DNS was not modified by this run - leaving it untouched.${RESET}"
         return 0
     fi
@@ -715,17 +718,21 @@ fix_dns_stop() {
         rm -f "$RESOLVED_MASK_STATE_FILE"
     fi
 
-    # Restore resolv.conf.
-    # Prefer symlink to resolved's live stub (dynamic, updates with network changes)
-    # over a static backup file.
-    if [[ -f /run/systemd/resolve/stub-resolv.conf ]]; then
+    # Restore resolv.conf. Prefer the live stub only when systemd-resolved
+    # was actually running before `start` - otherwise the stub file can
+    # exist while the service is deliberately stopped, and symlinking to it
+    # would leave DNS broken. This mirrors the resolver_start logic below.
+    local _was_running_for_link
+    _was_running_for_link=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
+    if [[ "$_was_running_for_link" == "yes" && -f /run/systemd/resolve/stub-resolv.conf ]]; then
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         echo -e "${YELLOW}[i] resolv.conf → symlink to stub-resolv.conf.${RESET}"
     elif [[ -f "$RESOLV_BACKUP" ]]; then
         cp "$RESOLV_BACKUP" /etc/resolv.conf
         echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
     else
-        echo "nameserver 1.1.1.1" > /etc/resolv.conf
+        echo "nameserver 1.1.1.1" > /etc/resolv.conf.tmp
+        mv -f /etc/resolv.conf.tmp /etc/resolv.conf
         echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
     fi
     rm -f "$RESOLV_BACKUP"
