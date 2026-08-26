@@ -236,7 +236,7 @@ require_root() {
 
 check_dependencies() {
     local missing=()
-    for cmd in tor iptables ip6tables iptables-save ip6tables-save curl ss; do
+    for cmd in tor iptables ip6tables iptables-save ip6tables-save iptables-restore ip6tables-restore curl ss; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
     if [[ ${#missing[@]} -gt 0 ]]; then
