@@ -628,8 +628,12 @@ fix_dns_start() {
         echo -e "${YELLOW}[i] DNS resolver was NOT running - will leave it stopped on stop.${RESET}"
     fi
 
-    # Back up resolv.conf before touching it
+    # Back up resolv.conf before touching it. Root-only mode: the dump can
+    # reveal internal nameserver topology, and /tmp is world-readable by
+    # default. (No global umask change - /etc/resolv.conf itself must stay
+    # readable by every process.)
     cp --dereference /etc/resolv.conf "$RESOLV_BACKUP" 2>/dev/null
+    chmod 600 "$RESOLV_BACKUP" 2>/dev/null
 
     # Mask and stop all resolver units (systemd only; other inits skip this).
     #
@@ -778,6 +782,9 @@ save_iptables() {
         rm -f "$IP6TABLES_BACKUP"
         echo -e "${YELLOW}[i] IPv6 not available - skipping IPv6 backup (nothing to block or restore).${RESET}"
     fi
+    # Root-only mode for the same reason as the resolv.conf backup above:
+    # firewall dumps expose network topology into a world-readable /tmp.
+    chmod 600 "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP" 2>/dev/null
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
 }
 

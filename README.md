@@ -329,6 +329,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 - This script is intended for **personal privacy use** on your own machine.
 - Only traffic originating from this machine is routed through Tor — other devices on your local network are not covered.
+- The firewall and `resolv.conf` backups written to `/tmp` during a session are created root-only (`0600`), since they reveal parts of your network topology.
 - Using Tor may be restricted or illegal in some countries — check your local laws.
 - For maximum anonymity, use the [Tor Browser](https://www.torproject.org/download/) which includes additional fingerprinting protections that this script cannot provide.
 
