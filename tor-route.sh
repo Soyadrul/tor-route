@@ -859,64 +859,75 @@ restore_iptables() {
 }
 
 apply_iptables() {
-    iptables -t nat -F OUTPUT
-    iptables -F OUTPUT
+    # Every mutation runs under set -e inside a subshell: the FIRST failing
+    # command aborts and surfaces as a failure here, instead of half a
+    # ruleset silently passing the later checks. The caller unwinds via
+    # restore_iptables on failure.
+    if ! (
+        set -e
 
-    # DNS/UDP port 53 → Tor DNS (excludes Tor's own traffic)
-    iptables -t nat -A OUTPUT \
-        -m owner ! --uid-owner "$TOR_UID" \
-        -p udp --dport 53 \
-        -j REDIRECT --to-ports "$TOR_DNS_PORT"
+        iptables -t nat -F OUTPUT
+        iptables -F OUTPUT
 
-    # DNS/TCP port 53 → Tor DNS (large responses fall back to TCP)
-    iptables -t nat -A OUTPUT \
-        -m owner ! --uid-owner "$TOR_UID" \
-        -p tcp --dport 53 \
-        -j REDIRECT --to-ports "$TOR_DNS_PORT"
+        # DNS/UDP port 53 → Tor DNS (excludes Tor's own traffic)
+        iptables -t nat -A OUTPUT \
+            -m owner ! --uid-owner "$TOR_UID" \
+            -p udp --dport 53 \
+            -j REDIRECT --to-ports "$TOR_DNS_PORT"
 
-    # Tor's own traffic passes untouched (prevents redirect loop)
-    iptables -t nat -A OUTPUT \
-        -m owner --uid-owner "$TOR_UID" \
-        -j RETURN
+        # DNS/TCP port 53 → Tor DNS (large responses fall back to TCP)
+        iptables -t nat -A OUTPUT \
+            -m owner ! --uid-owner "$TOR_UID" \
+            -p tcp --dport 53 \
+            -j REDIRECT --to-ports "$TOR_DNS_PORT"
 
-    # LAN/loopback ranges bypass Tor
-    for addr in $NON_TOR; do
-        iptables -t nat -A OUTPUT -d "$addr" -j RETURN
-    done
+        # Tor's own traffic passes untouched (prevents redirect loop)
+        iptables -t nat -A OUTPUT \
+            -m owner --uid-owner "$TOR_UID" \
+            -j RETURN
 
-    # All new TCP connections → Tor transparent proxy
-    iptables -t nat -A OUTPUT \
-        -p tcp \
-        -m state --state NEW \
-        -j REDIRECT --to-ports "$TOR_TRANS_PORT"
+        # LAN/loopback ranges bypass Tor
+        for addr in $NON_TOR; do
+            iptables -t nat -A OUTPUT -d "$addr" -j RETURN
+        done
 
-    # Block all non-DNS UDP (kills WebRTC/QUIC/STUN leaks)
-    iptables -A OUTPUT -m owner --uid-owner "$TOR_UID" -p udp -j ACCEPT
-    iptables -A OUTPUT -p udp --dport 53 -d 127.0.0.1 -j ACCEPT
-    for addr in $NON_TOR; do
-        iptables -A OUTPUT -p udp -d "$addr" -j ACCEPT
-    done
-    iptables -A OUTPUT -p udp -j DROP
+        # All new TCP connections → Tor transparent proxy
+        iptables -t nat -A OUTPUT \
+            -p tcp \
+            -m state --state NEW \
+            -j REDIRECT --to-ports "$TOR_TRANS_PORT"
 
-    # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack
-    # sites). On kernels without an IPv6 stack there is nothing to leak -
-    # skip instead of failing.
-    if ipv6_available; then
-        ip6tables -P INPUT   DROP
-        ip6tables -P OUTPUT  DROP
-        ip6tables -P FORWARD DROP
+        # Block all non-DNS UDP (kills WebRTC/QUIC/STUN leaks)
+        iptables -A OUTPUT -m owner --uid-owner "$TOR_UID" -p udp -j ACCEPT
+        iptables -A OUTPUT -p udp --dport 53 -d 127.0.0.1 -j ACCEPT
+        for addr in $NON_TOR; do
+            iptables -A OUTPUT -p udp -d "$addr" -j ACCEPT
+        done
+        iptables -A OUTPUT -p udp -j DROP
 
-        # Verify the policies actually took effect. If ip6tables failed
-        # silently here despite a working stack, IPv6 traffic would keep
-        # flowing unproxied - a leak. Abort so `start` never claims success
-        # over an enabled IPv6 stack.
-        if ! ip6tables -L OUTPUT -n 2>/dev/null | grep -q "policy DROP"; then
-            echo -e "${RED}[✗] Could not apply IPv6 DROP policies - IPv6 would stay enabled and leak. Check that the ipv6 kernel module is loaded.${RESET}"
-            return 1
+        # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack
+        # sites). On kernels without an IPv6 stack there is nothing to leak -
+        # skip instead of failing.
+        if ipv6_available; then
+            ip6tables -P INPUT   DROP
+            ip6tables -P OUTPUT  DROP
+            ip6tables -P FORWARD DROP
+
+            # Verify the policies actually took effect. If ip6tables failed
+            # silently here despite a working stack, IPv6 traffic would keep
+            # flowing unproxied - a leak. Abort so `start` never claims success
+            # over an enabled IPv6 stack.
+            if ! ip6tables -L OUTPUT -n 2>/dev/null | grep -q "policy DROP"; then
+                echo -e "${RED}[✗] Could not apply IPv6 DROP policies - IPv6 would stay enabled and leak. Check that the ipv6 kernel module is loaded.${RESET}" >&2
+                exit 1
+            fi
+            echo -e "${YELLOW}[i] IPv6 blocked.${RESET}"
+        else
+            echo -e "${YELLOW}[i] IPv6 not available (disabled in kernel?) - skipping IPv6 blocking, nothing to leak.${RESET}"
         fi
-        echo -e "${YELLOW}[i] IPv6 blocked.${RESET}"
-    else
-        echo -e "${YELLOW}[i] IPv6 not available (disabled in kernel?) - skipping IPv6 blocking, nothing to leak.${RESET}"
+    ); then
+        echo -e "${RED}[✗] Failed to apply the firewall rules.${RESET}"
+        return 1
     fi
 
     echo -e "${YELLOW}[i] Non-DNS UDP blocked (WebRTC/STUN/QUIC prevented).${RESET}"
