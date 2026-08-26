@@ -189,8 +189,8 @@ Displays a live summary:
 - The **detected init system** (systemd, openrc, runit, or sysvinit)
 - Whether the Tor service is running
 - Whether TCP traffic is being routed through Tor
-- Whether UDP / WebRTC is blocked
-- Whether IPv6 is blocked
+- Whether UDP / WebRTC is blocked (checked only while routing is active, and matched against the script's own rules)
+- Whether IPv6 is blocked (chain policy, checked only while routing is active)
 - Whether the DNS resolver is masked (systemd) or redirected via `/etc/resolv.conf` (other inits) — only shown while routing is active; if routing is off, `status` just shows the resolver's normal state
 - The **configured exit node country** (pinned code or `Random`)
 - Whether Tor is listening on the correct ports

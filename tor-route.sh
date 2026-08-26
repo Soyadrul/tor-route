@@ -421,10 +421,17 @@ cmd_check() {
     fi
     if command -v ip6tables &>/dev/null; then
         echo -e "  ip6tables: $(ip6tables --version 2>/dev/null || echo 'found')"
-        if ip6tables -L -n 2>/dev/null | grep -q "DROP\|policy DROP"; then
+        # Report the actual chain POLICY, not the presence of any DROP rule:
+        # a user's own firewall can contain DROP rules while everything
+        # still passes by default policy.
+        local v6pol
+        v6pol=$(ip6tables -L OUTPUT -n 2>/dev/null | head -n1)
+        if [[ "$v6pol" == *"policy DROP"* ]]; then
             echo -e "  IPv6 policy:  ${GREEN}Blocked${RESET}"
+        elif [[ "$v6pol" =~ \((policy\ [A-Z]+)\) ]]; then
+            echo -e "  IPv6 policy:  ${YELLOW}Not blocked (${BASH_REMATCH[1]})${RESET}"
         else
-            echo -e "  IPv6 policy:  ${YELLOW}Not blocked${RESET}"
+            echo -e "  IPv6 policy:  ${YELLOW}Not blocked (no stack or unreadable)${RESET}"
         fi
     else
         echo -e "  ip6tables: ${YELLOW}not available${RESET}"
@@ -1135,22 +1142,25 @@ cmd_status() {
 
     if is_routing_active; then
         echo -e "  TCP routing:       ${GREEN}${BOLD}Through Tor ✓${RESET}"
-    else
-        echo -e "  TCP routing:       ${YELLOW}Direct (not through Tor)${RESET}"
-    fi
 
-    iptables -L OUTPUT 2>/dev/null | grep -q "udp.*DROP\|DROP.*udp" \
-        && echo -e "  UDP / WebRTC:      ${GREEN}${BOLD}Blocked ✓${RESET}" \
-        || echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
+        # Match our OWN rules, not just any DROP rule the user's firewall
+        # may already contain: -S prints the exact rule syntax we applied,
+        # and the v6 check looks at the chain POLICY line only.
+        if iptables -S OUTPUT 2>/dev/null | grep -q -- "-p udp -j DROP"; then
+            echo -e "  UDP / WebRTC:      ${GREEN}${BOLD}Blocked ✓${RESET}"
+        else
+            echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
+        fi
 
-    ip6tables -L OUTPUT 2>/dev/null | grep -q "DROP\|policy DROP" \
-        && echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" \
-        || echo -e "  IPv6:              ${YELLOW}Not blocked${RESET}"
+        if ip6tables -L OUTPUT 2>/dev/null | head -n1 | grep -q "policy DROP"; then
+            echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}"
+        else
+            echo -e "  IPv6:              ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
+        fi
 
-    # Check the DNS resolver state. This only means something while routing is
-    # active: `start` masks the resolver (systemd) or repoints resolv.conf.
-    # Outside a routed session the system's normal DNS setup is expected.
-    if is_routing_active; then
+        # The DNS masking state only means something while routing is
+        # active: `start` masks the resolver (systemd) or repoints
+        # resolv.conf. Checked inside the same branch as the rules above.
         if [[ "$INIT" == "systemd" ]]; then
             local resolved_ok=true
             for unit in "${RESOLVED_UNITS[@]}"; do
@@ -1171,6 +1181,9 @@ cmd_status() {
             fi
         fi
     else
+        echo -e "  TCP routing:       ${YELLOW}Direct (not through Tor)${RESET}"
+        echo -e "  UDP / WebRTC:      Not routed (no filtering)"
+        echo -e "  IPv6:              Not blocked (routing is off)"
         if resolver_is_active systemd-resolved.service; then
             echo -e "  DNS:               ${YELLOW}systemd-resolved active (normal, not routed)${RESET}"
         else
