@@ -275,6 +275,17 @@ check_net_tools() {
 # lock automatically when the process dies, so stale locks cannot happen.
 # Read-only commands (status/check/countries) are deliberately not locked.
 acquire_command_lock() {
+    # Mitigate symlink attacks in world-writable /tmp: an attacker who
+    # pre-creates the lock path as a symlink could make root append to an
+    # arbitrary file. Refuse to follow it and create the file with safe
+    # permissions before flocking.
+    if [[ -L "$COMMAND_LOCK_FILE" ]]; then
+        echo -e "${RED}[✗] Lock file is a symlink - refusing to follow for security (${COMMAND_LOCK_FILE}).${RESET}" >&2
+        echo -e "    ${YELLOW}Remove the symlink manually and retry.${RESET}" >&2
+        exit 1
+    fi
+    : >>"$COMMAND_LOCK_FILE" 2>/dev/null
+    chmod 600 "$COMMAND_LOCK_FILE" 2>/dev/null || true
     exec 9>>"$COMMAND_LOCK_FILE"
     if command -v flock &>/dev/null; then
         if ! flock -n 9; then
