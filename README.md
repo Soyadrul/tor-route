@@ -198,7 +198,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Detects and displays the init system. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet

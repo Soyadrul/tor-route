@@ -1222,6 +1222,15 @@ cmd_newnode() {
         echo -e "${RED}[✗] Tor is not running. Run: sudo ${0##*/} start${RESET}"; exit 1
     fi
 
+    # A reload only makes sense inside an active session: without the
+    # redirect rules nothing is routed, the IP-change verification below
+    # would compare your real address against itself, and writing the
+    # country state file would leave stale state behind for status to
+    # misreport afterwards.
+    if ! is_routing_active; then
+        echo -e "${RED}[✗] Tor routing is not active. Run: sudo ${0##*/} start${RESET}"; exit 1
+    fi
+
     # Parse optional country code argument
     local country=""
     if [[ -n "${2:-}" ]]; then
