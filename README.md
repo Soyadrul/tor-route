@@ -158,15 +158,28 @@ sudo tor-route stop
 
 ## What each command does internally
 
+> **Concurrency and crash safety shared by all mutating commands.** `start`, `stop`, and `newnode` first try to take a non-blocking `flock` on `/tmp/tor-route.lock` (`tor-route.sh:62,277`). The helper refuses a pre-existing symlink at that path, creates the file `0600`, and holds file descriptor 9 for the whole run — the kernel releases it on exit, so stale locks cannot happen. A second concurrent invocation exits immediately with `[✗] Another tor-route command is already running.` Read-only commands (`status`, `check`, `countries`) never take the lock.
+
+> **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place (`tor-route.sh:682,769,793`), and every backup in `/tmp` is `chmod 600`. A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
+
+> **External HTTPS requests.** The script only contacts four hosts, all over `https://`, and only to implement the features below. When routing is active the requests themselves go through Tor, so the remote host only ever sees the exit IP; when routing is off they go direct. See the table under step 7.
+
 ### `start [CC]`
 
 1. Validates the optional country code `CC` against the full [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) list.
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country, and saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
 3. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to be ready — either the log reports "Bootstrapped 100%" or the trans proxy port starts listening. Whether Tor was already running before is recorded to a state file so `stop` can put the service back the way it was found.
 4. Verifies that Tor is actually listening on both expected ports.
-5. Backs up existing `iptables` and `ip6tables` rules, then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched; empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect and aborts (with a full restore) if they did not — it never claims success while IPv6 could still leak.
+5. Backs up existing `iptables` and `ip6tables` rules via `.tmp` siblings (atomic `mv`, see note above), then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched; empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect and aborts (with a full restore) if they did not — it never claims success while IPv6 could still leak.
 6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it — recording which units were not already masked beforehand so `stop` only undoes its own changes and leaves deliberately-masked units alone. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
-7. Announces success only once a request actually travels through Tor (a probe to `api.ipify.org`, falling back to `check.torproject.org`). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet.
+7. Announces success only once a request actually travels through Tor. The probe tries `https://api.ipify.org` (`-4`, short timeout) and falls back to `https://check.torproject.org` if the first host is down or blocked. Afterwards `show_ip` (`tor-route.sh:974`) fetches the public IPv4 from `https://api.ipify.org`, enriches it via `https://ipwho.is/<ip>` for country/ISP (only the IP already displayed is sent), and checks `https://api6.ipify.org` (`-6`) — if it answers, IPv6 is leaking. All four hosts are `https://` only. If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet.
+
+   | Host | Purpose |
+   |---|---|
+   | `https://api.ipify.org` | Lightweight IPv4 as the outside world sees it; also the `newnode` old/new comparison |
+   | `https://api6.ipify.org` | IPv6 leak test (`-6`); `LEAK!` vs `Blocked ✓` |
+   | `https://check.torproject.org` | Fallback probe during `start` if `api.ipify.org` is unavailable |
+   | `https://ipwho.is/<ip>` | Country/ISP enrichment for the IP already fetched |
 
 If routing is already active (the Tor redirect rule is present), `start` refuses to re-apply and exits instead — re-running it would overwrite the firewall and DNS backups with the current Tor state, so a later `stop` would restore the wrong data. Run `stop` first to re-apply, or `newnode` to change the exit node.
 
@@ -175,6 +188,8 @@ If routing is already active (the Tor redirect rule is present), `start` refuses
 Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2) country codes alongside usage examples. Useful to look up the code for a specific country before running `start` or `newnode`.
 
 ### `stop`
+
+Takes the same advisory lock as `start` (see note above) and refuses to run concurrently.
 
 1. Detects and displays the init system.
 2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only, so unrelated established connections are left alone. Afterwards it verifies the Tor redirect is actually gone; if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions instead of shutting down Tor and black-holing traffic.
@@ -198,7 +213,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Takes the same advisory lock as `start` (see note above). Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
