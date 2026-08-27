@@ -26,6 +26,7 @@ Route all of your machine's TCP and DNS traffic through Tor with a single comman
     4.  [`status`](#status)
     5.  [`newnode [CC]`](#newnode-cc)
     6.  [`check`](#check)
+    7.  [Out-of-order and repeated commands](#out-of-order-and-repeated-commands)
 6.  [Known limitations](#known-limitations)
      1.  [Existing connections](#existing-connections)
      2.  [Browser WebRTC](#browser-webrtc)
@@ -238,7 +239,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **Tor log** — last 5 lines of journal/log output (a missing log is a note, not a failed check)
 - **Verdict** — pass/fail summary with an invitation to paste the full output in an issue
 
-#### Out-of-order and repeated commands
+### Out-of-order and repeated commands
 
 | Situation | What the script does | Safe to retry? |
 |---|---|---|
