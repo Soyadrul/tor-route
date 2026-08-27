@@ -986,9 +986,9 @@ show_ip() {
         geo=$(curl -s --max-time 8 "https://ipwho.is/${ip}" 2>/dev/null)
         if [[ -n "$geo" ]]; then
             local country_name country_code isp
-            country_name=$(echo "$geo" | grep -o '"country":"[^"]*"' | cut -d'"' -f4)
-            country_code=$(echo "$geo" | grep -o '"country_code":"[^"]*"' | cut -d'"' -f4)
-            isp=$(echo "$geo" | grep -o '"isp":"[^"]*"' | cut -d'"' -f4)
+            country_name=$(echo "$geo" | grep -o '"country"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+            country_code=$(echo "$geo" | grep -o '"country_code"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
+            isp=$(echo "$geo" | grep -o '"isp"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
             [[ -n "$country_name" ]] && echo -e "    Country: ${BOLD}${country_name} (${country_code})${RESET}"
             [[ -n "$isp"          ]] && echo -e "    ISP/Org: ${BOLD}${isp}${RESET}"
         fi
