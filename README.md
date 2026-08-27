@@ -161,9 +161,9 @@ sudo tor-route stop
 
 #### Shared notes
 
-> **Concurrency and crash safety.** `start`, `stop`, and `newnode` first try to take a non-blocking `flock` on `/tmp/tor-route.lock`. The helper refuses a pre-existing symlink at that path, creates the file `0600`, and holds file descriptor 9 for the whole run — the kernel releases it on exit, so stale locks cannot happen. A second concurrent invocation exits immediately with `[✗] Another tor-route command is already running.` Read-only commands (`status`, `check`, `countries`) never take the lock.
+> **Concurrency and crash safety.** `start`, `stop`, and `newnode` first try to take a non-blocking `flock` on `/run/tor-route/lock` (fallback `/tmp/tor-route/lock` when `/run` is absent). The helper refuses a pre-existing symlink at that path, creates the file `0600`, and holds file descriptor 9 for the whole run — the kernel releases it on exit, so stale locks cannot happen. A second concurrent invocation exits immediately with `[✗] Another tor-route command is already running.` Read-only commands (`status`, `check`, `countries`) never take the lock.
 
-> **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place, and every backup in `/tmp` is `chmod 600`. A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
+> **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place, and every backup in `/run/tor-route` (fallback `/tmp/tor-route`) is `chmod 600`. A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
 
 > **External HTTPS requests.** The script only contacts four hosts, all over `https://` — `api.ipify.org` with `-4`, `api6.ipify.org` with `-6`, `check.torproject.org` with `-4`, `ipwho.is/<ip>` without an explicit `-4`/`-6` flag but still covered by the IPv6 `DROP` policy and the `OUTPUT` redirect when routing is active — and only to implement the features below. When routing is active the requests themselves go through Tor (via the `nat OUTPUT` redirect), so the remote host only ever sees the exit IP; when routing is off they go direct.
 
@@ -192,7 +192,7 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 
 ### `stop`
 
-Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see [Shared notes](#shared-notes). A second concurrent invocation is refused.
+Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — see [Shared notes](#shared-notes). A second concurrent invocation is refused.
 
 1. Detects and displays the init system.
 2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (`conntrack -D -p tcp --reply-port-src 9040` / `-p udp --reply-port-src 5353`, if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only (`--reply-port-src`, not `conntrack -F`), so unrelated established connections (including the SSH session running `stop`) are left alone. Afterwards it verifies the Tor redirect is actually gone (`is_routing_active`); if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions instead of shutting down Tor and black-holing traffic.
@@ -217,7 +217,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while **both** the Tor service is running **and** routing is active; it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees and would leave stale `tor-route-country` state. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process (`service_tor_reload` — `systemctl kill --signal=SIGHUP` / `rc-service reload` / `sv reload`). This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while **both** the Tor service is running **and** routing is active; it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees and would leave stale `country` state. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process (`service_tor_reload` — `systemctl kill --signal=SIGHUP` / `rc-service reload` / `sv reload`). This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
@@ -245,9 +245,9 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 | Situation | What the script does | Safe to retry? |
 |---|---|---|
 | `start` then `start` again after the first has **finished** (same terminal, still routed) | **Sequential guard:** refuses with `Tor routing is already active` — backups are not overwritten, exits `0` | Run `stop` first, or `newnode` to change exit |
-| `start` and `start` at the **same time** (two terminals, overlapping) | **Flock lock:** second is refused immediately by the `flock` on `/tmp/tor-route.lock` with `[✗] Another tor-route command is already running`, exits `1`; no state is changed | Wait for the first to finish and retry |
+| `start` and `start` at the **same time** (two terminals, overlapping) | **Flock lock:** second is refused immediately by the `flock` on `/run/tor-route/lock` with `[✗] Another tor-route command is already running`, exits `1`; no state is changed | Wait for the first to finish and retry |
 | `stop` with no prior `start` | Firewall/DNS restore no-ops; Tor is stopped if running | Harmless except it stops a system `tor` that was already running |
-| `stop` twice in a row | Second run is almost a full no-op — firewall/DNS print `was not modified - leaving it untouched` and only re-verifies connectivity; `restore_tor_service` still attempts `service_tor_stop` but is harmless if already stopped | Yes, but it will not repair a failed first `stop` beyond the re-check; if the first `stop` failed to restore (`iptables-restore` error, backup kept at `/tmp/iptables-pre-tor.rules`), the second run will retry the restore instead of no-oping |
+| `stop` twice in a row | Second run is almost a full no-op — firewall/DNS print `was not modified - leaving it untouched` and only re-verifies connectivity; `restore_tor_service` still attempts `service_tor_stop` but is harmless if already stopped | Yes, but it will not repair a failed first `stop` beyond the re-check; if the first `stop` failed to restore (`iptables-restore` error, backup kept at `/run/tor-route/iptables-pre-tor.rules`), the second run will retry the restore instead of no-oping |
 | `newnode` before `start` | Refused with `Tor is not running` or `Tor routing is not active`; `torrc` is not touched | Run `start` first |
 | Any two of `start`/`stop`/`newnode` overlapping (e.g. `start` + `stop`) | Same flock as above — second is refused immediately; read-only `status`/`check`/`countries` never take the lock | Wait and retry |
 
@@ -339,7 +339,7 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 **Another tor-route command is already running**
 
-The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blocking `flock` on `/tmp/tor-route.lock`. A second one prints `[✗] Another tor-route command is already running.` — wait for the first to finish, then retry. A stray symlink at `/tmp/tor-route.lock` is refused for security; remove it manually if you created it.
+The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blocking `flock` on `/run/tor-route/lock`. A second one prints `[✗] Another tor-route command is already running.` — wait for the first to finish, then retry. A stray symlink at that path (or its parent directory) is refused for security; remove it manually if you created it.
 
 **Geo lookup shows the wrong country**
 
@@ -353,14 +353,14 @@ The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blo
 |---|---|
 | `/etc/tor/torrc` | Tor configuration — the script appends and removes its own block |
 | `/etc/resolv.conf` | DNS resolver config — replaced during `start`, restored on `stop` |
-| `/tmp/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active) |
-| `/tmp/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
-| `/tmp/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
-| `/tmp/tor-route-country` | Records the active exit node country (or `random`) while Tor routing is active |
-| `/tmp/tor-route-resolved-state` | Records whether a DNS resolver was running before `start` |
-| `/tmp/tor-route-tor-state` | Records whether the Tor service was running before `start` |
-| `/tmp/tor-route-resolved-mask` | Lists the resolved units `start` masked itself (previously-masked units are not listed) |
-| `/tmp/tor-route.lock` | Advisory lock held while `start`/`stop`/`newnode` run (prevents concurrent corruption; auto-released on exit) |
+| `/run/tor-route/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active; fallback `/tmp/tor-route` when `/run` is absent) |
+| `/run/tor-route/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
+| `/run/tor-route/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
+| `/run/tor-route/country` | Records the active exit node country (or `random`) while Tor routing is active |
+| `/run/tor-route/resolved-state` | Records whether a DNS resolver was running before `start` |
+| `/run/tor-route/tor-state` | Records whether the Tor service was running before `start` |
+| `/run/tor-route/resolved-mask` | Lists the resolved units `start` masked itself (previously-masked units are not listed) |
+| `/run/tor-route/lock` | Advisory lock held while `start`/`stop`/`newnode` run (prevents concurrent corruption; auto-released on exit) |
 
 ---
 
@@ -368,7 +368,7 @@ The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blo
 
 - This script is intended for **personal privacy use** on your own machine.
 - Only traffic originating from this machine is routed through Tor — other devices on your local network are not covered.
-- The firewall and `resolv.conf` backups written to `/tmp` during a session are created root-only (`0600`), since they reveal parts of your network topology. The lock file is also created `0600` and a pre-existing symlink at that path is refused.
+- The firewall and `resolv.conf` backups written to `/run/tor-route` (fallback `/tmp/tor-route`) during a session are created root-only (`0600`) inside a `0700` directory, since they reveal parts of your network topology. The lock file is also created `0600` and a pre-existing symlink at that path or its parent directory is refused.
 - The country/ISP line in `status` comes from a lookup of the IP already shown (`https://ipwho.is/<ip>`). When routing is active the lookup itself goes through Tor, so the service only ever sees the exit IP; when routing is off it goes direct. No other data is sent.
 - Using Tor may be restricted or illegal in some countries — check your local laws.
 - For maximum anonymity, use the [Tor Browser](https://www.torproject.org/download/) which includes additional fingerprinting protections that this script cannot provide.

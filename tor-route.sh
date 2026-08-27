@@ -33,33 +33,53 @@ done
 NON_TOR="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 TORRC="/etc/tor/torrc"
 
+# Runtime state directory: /run is the FHS location for ephemeral root-owned
+# state (tmpfs, 755 root:root, cleared on reboot, immune to /tmp cleaners).
+# Falls back to /tmp/tor-route on minimal systems where /run is absent.
+STATE_DIR="/run/tor-route"
+if [[ ! -d /run || ! -w /run ]]; then
+    STATE_DIR="/tmp/tor-route"
+fi
+
 # Backup / state files written during `start`, read back during `stop`
-IPTABLES_BACKUP="/tmp/iptables-pre-tor.rules"
-IP6TABLES_BACKUP="/tmp/ip6tables-pre-tor.rules"
-RESOLV_BACKUP="/tmp/resolv.conf.pre-tor"
+IPTABLES_BACKUP="$STATE_DIR/iptables-pre-tor.rules"
+IP6TABLES_BACKUP="$STATE_DIR/ip6tables-pre-tor.rules"
+RESOLV_BACKUP="$STATE_DIR/resolv.conf.pre-tor"
 
 # Records whether a DNS resolver was active before `start` touched it.
 # `stop` reads this so it only restores the resolver if it was running originally.
 # On systemd this tracks systemd-resolved; on other inits it always records "no".
-RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
+RESOLVED_STATE_FILE="$STATE_DIR/resolved-state"
 
 # Persists the active country code (or "random") so `status` and `newnode`
 # can read it back without re-parsing torrc.
-COUNTRY_FILE="/tmp/tor-route-country"
+COUNTRY_FILE="$STATE_DIR/country"
 
 # Records whether the Tor service itself was running before `start` took it
 # over, so `stop`/unwind can put it back the way it was found (mirrors
 # RESOLVED_STATE_FILE for the DNS resolver).
-TOR_STATE_FILE="/tmp/tor-route-tor-state"
+TOR_STATE_FILE="$STATE_DIR/tor-state"
 
 # Lists the systemd-resolved units that were NOT already masked before
 # `start`, so `stop` only unmasks those; units the user had deliberately
 # masked themselves stay masked after the session.
-RESOLVED_MASK_STATE_FILE="/tmp/tor-route-resolved-mask"
+RESOLVED_MASK_STATE_FILE="$STATE_DIR/resolved-mask"
 
 # Advisory lock held by mutating commands (start/stop/newnode) so two
 # overlapping invocations cannot corrupt each other's backups or state.
-COMMAND_LOCK_FILE="/tmp/tor-route.lock"
+COMMAND_LOCK_FILE="$STATE_DIR/lock"
+
+# Legacy scattered /tmp paths from pre-1.4 releases. Kept for one-release
+# migration: if a session was started with the old layout and the script was
+# upgraded mid-session, migrate_legacy_state moves them into $STATE_DIR.
+LEGACY_IPTABLES_BACKUP="/tmp/iptables-pre-tor.rules"
+LEGACY_IP6TABLES_BACKUP="/tmp/ip6tables-pre-tor.rules"
+LEGACY_RESOLV_BACKUP="/tmp/resolv.conf.pre-tor"
+LEGACY_RESOLVED_STATE_FILE="/tmp/tor-route-resolved-state"
+LEGACY_COUNTRY_FILE="/tmp/tor-route-country"
+LEGACY_TOR_STATE_FILE="/tmp/tor-route-tor-state"
+LEGACY_RESOLVED_MASK_STATE_FILE="/tmp/tor-route-resolved-mask"
+LEGACY_COMMAND_LOCK_FILE="/tmp/tor-route.lock"
 
 # Populated by require_init() based on the detected init system.
 # For systemd: socket units must be masked alongside the service to prevent
@@ -267,6 +287,57 @@ check_net_tools() {
     fi
 }
 
+ensure_state_dir() {
+    # Create $STATE_DIR with safe permissions. On /tmp the parent is world-
+    # writable, so an attacker could pre-create $STATE_DIR as a symlink to
+    # e.g. /etc; on /run the parent is 755 root-only, but we still check.
+    if [[ -L "$STATE_DIR" ]]; then
+        echo -e "${RED}[✗] State directory is a symlink - refusing to follow for security (${STATE_DIR}).${RESET}" >&2
+        echo -e "    ${YELLOW}Remove the symlink manually and retry.${RESET}" >&2
+        exit 1
+    fi
+    if [[ ! -d "$STATE_DIR" ]]; then
+        mkdir -p "$STATE_DIR" 2>/dev/null || {
+            echo -e "${RED}[✗] Could not create state directory ${STATE_DIR}.${RESET}" >&2
+            exit 1
+        }
+    fi
+    if [[ ! -d "$STATE_DIR" ]]; then
+        echo -e "${RED}[✗] State path exists but is not a directory (${STATE_DIR}).${RESET}" >&2
+        exit 1
+    fi
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+    if [[ -L "$STATE_DIR" ]]; then
+        echo -e "${RED}[✗] State directory became a symlink - aborting (${STATE_DIR}).${RESET}" >&2
+        exit 1
+    fi
+}
+
+migrate_legacy_state() {
+    # One-release migration from scattered /tmp (pre-1.4) into $STATE_DIR.
+    # Only moves a legacy file when the new path does not yet exist, so a
+    # newer session is never overwritten. Best-effort; failures are silent.
+    local legacy new pair
+    for pair in \
+        "$LEGACY_IPTABLES_BACKUP:$IPTABLES_BACKUP" \
+        "$LEGACY_IP6TABLES_BACKUP:$IP6TABLES_BACKUP" \
+        "$LEGACY_RESOLV_BACKUP:$RESOLV_BACKUP" \
+        "$LEGACY_RESOLVED_STATE_FILE:$RESOLVED_STATE_FILE" \
+        "$LEGACY_COUNTRY_FILE:$COUNTRY_FILE" \
+        "$LEGACY_TOR_STATE_FILE:$TOR_STATE_FILE" \
+        "$LEGACY_RESOLVED_MASK_STATE_FILE:$RESOLVED_MASK_STATE_FILE"; do
+        legacy="${pair%%:*}"
+        new="${pair##*:}"
+        if [[ -f "$legacy" && ! -e "$new" ]]; then
+            ensure_state_dir
+            mv -f "$legacy" "$new" 2>/dev/null || {
+                cp -a "$legacy" "$new" 2>/dev/null && rm -f "$legacy" 2>/dev/null || true
+            }
+            chmod 600 "$new" 2>/dev/null || true
+        fi
+    done
+}
+
 # Serialise mutating commands (start/stop/newnode). They all rewrite the same
 # state - firewall, resolv.conf, torrc, services - and `start`'s "already
 # active?" gate runs long before the rules appear, so two overlapping runs
@@ -275,10 +346,12 @@ check_net_tools() {
 # lock automatically when the process dies, so stale locks cannot happen.
 # Read-only commands (status/check/countries) are deliberately not locked.
 acquire_command_lock() {
-    # Mitigate symlink attacks in world-writable /tmp: an attacker who
-    # pre-creates the lock path as a symlink could make root append to an
-    # arbitrary file. Refuse to follow it and create the file with safe
-    # permissions before flocking.
+    ensure_state_dir
+    migrate_legacy_state
+    # Mitigate symlink attacks: an attacker who pre-creates the lock path as
+    # a symlink could make root append to an arbitrary file. Refuse to follow
+    # it and create the file with safe permissions before flocking. The state
+    # directory itself is already validated by ensure_state_dir.
     if [[ -L "$COMMAND_LOCK_FILE" ]]; then
         echo -e "${RED}[✗] Lock file is a symlink - refusing to follow for security (${COMMAND_LOCK_FILE}).${RESET}" >&2
         echo -e "    ${YELLOW}Remove the symlink manually and retry.${RESET}" >&2
@@ -410,6 +483,7 @@ cmd_check() {
 
     # ── State files ─────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── State files ─────────────────────────${RESET}"
+    echo -e "  State dir: ${STATE_DIR} $([[ -d "$STATE_DIR" ]] && echo "${GREEN}(exists)${RESET}" || echo '(not present)')"
     for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE RESOLVED_MASK_STATE_FILE; do
         local path="${!f}"
         if [[ -f "$path" ]]; then
@@ -418,6 +492,17 @@ cmd_check() {
             echo -e "  ${f}:  ${path}  (not present)"
         fi
     done
+    # Legacy scattered /tmp paths (pre-1.4) - shown only if they still exist
+    local _legacy_found=0
+    for f in LEGACY_IPTABLES_BACKUP LEGACY_IP6TABLES_BACKUP LEGACY_RESOLV_BACKUP LEGACY_RESOLVED_STATE_FILE LEGACY_COUNTRY_FILE LEGACY_TOR_STATE_FILE LEGACY_RESOLVED_MASK_STATE_FILE LEGACY_COMMAND_LOCK_FILE; do
+        local path="${!f}"
+        if [[ -e "$path" ]]; then
+            [[ $_legacy_found -eq 0 ]] && echo -e "  ${YELLOW}Legacy (pre-1.4) files still present:${RESET}"
+            _legacy_found=1
+            echo -e "    ${f}: ${path}  ${YELLOW}(legacy)${RESET}"
+        fi
+    done
+    [[ $_legacy_found -eq 1 ]] && echo -e "    ${YELLOW}→ Run stop with the new version to migrate them, or remove manually if routing is off.${RESET}"
 
     # ── Firewall ────────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── Firewall ────────────────────────────${RESET}"
@@ -463,9 +548,11 @@ cmd_check() {
     local ns_count
     ns_count=$(grep -c '^nameserver' /etc/resolv.conf 2>/dev/null)
     echo -e "  Nameservers:  ${ns_count:-0} entries"
-    echo -e "  Backup:       $( [[ -f "$RESOLV_BACKUP" ]] && echo "${GREEN}exists${RESET}" || echo 'not present' )"
-    if [[ "$INIT" == "systemd" ]] && [[ -f "$RESOLVED_STATE_FILE" ]]; then
-        echo -e "  Resolved:     was $(cat "$RESOLVED_STATE_FILE")"
+    echo -e "  Backup:       $( [[ -f "$RESOLV_BACKUP" || -f "$LEGACY_RESOLV_BACKUP" ]] && echo "${GREEN}exists${RESET}" || echo 'not present' )"
+    if [[ "$INIT" == "systemd" ]] && [[ -f "$RESOLVED_STATE_FILE" || -f "$LEGACY_RESOLVED_STATE_FILE" ]]; then
+        local _rs
+        _rs=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || cat "$LEGACY_RESOLVED_STATE_FILE" 2>/dev/null)
+        echo -e "  Resolved:     was ${_rs}"
     fi
 
     # ── Tor log ─────────────────────────────────────────────────────────────
@@ -531,6 +618,7 @@ configure_torrc() {
     # Optional first argument: a validated 2-letter country code, or empty for random.
     local country="${1:-}"
 
+    ensure_state_dir
     strip_torrc_block
 
     if [[ -n "$country" ]]; then
@@ -569,7 +657,7 @@ cleanup_torrc() {
     # NOT removing bare TransPort/DNSPort/ExitNodes lines here: they may be
     # the user's own pre-existing config. Only our marked block goes away.
     strip_torrc_block
-    rm -f "$COUNTRY_FILE"
+    rm -f "$COUNTRY_FILE" "$LEGACY_COUNTRY_FILE"
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
@@ -578,10 +666,11 @@ cleanup_torrc() {
 # the service so it comes back on the user's own configuration; if it was
 # not running, just stop it. Consumes the state file either way; a missing
 # file defaults to "not running", i.e. the old stop-always behaviour.
+# Checks legacy path as fallback for mid-session upgrades.
 restore_tor_service() {
     local was_running
-    was_running=$(cat "$TOR_STATE_FILE" 2>/dev/null)
-    rm -f "$TOR_STATE_FILE"
+    was_running=$(cat "$TOR_STATE_FILE" 2>/dev/null || cat "$LEGACY_TOR_STATE_FILE" 2>/dev/null)
+    rm -f "$TOR_STATE_FILE" "$LEGACY_TOR_STATE_FILE"
     if [[ "$was_running" == "yes" ]]; then
         echo -e "${YELLOW}[i] Tor was running before - restoring it with the original config...${RESET}"
         cleanup_torrc
@@ -629,6 +718,7 @@ interrupt_unwind() {
 
 # ── DNS resolver handling ─────────────────────────────────────────────────────
 fix_dns_start() {
+    ensure_state_dir
     # Record whether a DNS resolver was running before we touch anything.
     # On systemd this checks systemd-resolved; on other inits it's always "no".
     if resolver_running; then
@@ -638,6 +728,7 @@ fix_dns_start() {
         echo "no" > "$RESOLVED_STATE_FILE"
         echo -e "${YELLOW}[i] DNS resolver was NOT running - will leave it stopped on stop.${RESET}"
     fi
+    chmod 600 "$RESOLVED_STATE_FILE" 2>/dev/null || true
 
     # Back up resolv.conf before touching it. Root-only mode: the dump can
     # reveal internal nameserver topology, and /tmp is world-readable by
@@ -689,11 +780,15 @@ fix_dns_stop() {
     # there is nothing to restore - the 1.1.1.1 fallback below would
     # otherwise clobber an untouched resolv.conf. Also consider the mask
     # state file, which can exist alone if start was interrupted right after
-    # masking.
-    if [[ ! -f "$RESOLVED_STATE_FILE" && ! -f "$RESOLV_BACKUP" && ! -f "$RESOLVED_MASK_STATE_FILE" ]]; then
+    # masking. Check legacy paths as fallback for mid-session upgrades.
+    if [[ ! -f "$RESOLVED_STATE_FILE" && ! -f "$LEGACY_RESOLVED_STATE_FILE" && ! -f "$RESOLV_BACKUP" && ! -f "$LEGACY_RESOLV_BACKUP" && ! -f "$RESOLVED_MASK_STATE_FILE" && ! -f "$LEGACY_RESOLVED_MASK_STATE_FILE" ]]; then
         echo -e "${YELLOW}[i] DNS was not modified by this run - leaving it untouched.${RESET}"
         return 0
     fi
+
+    # Resolve effective mask file (prefer new, fallback to legacy)
+    local _mask_file="$RESOLVED_MASK_STATE_FILE"
+    [[ -f "$_mask_file" ]] || _mask_file="$LEGACY_RESOLVED_MASK_STATE_FILE"
 
     # Unmask resolver units (systemd only; other inits have none). Only
     # units that were NOT already masked before `start` get unmasked - see
@@ -701,13 +796,13 @@ fix_dns_stop() {
     # an older script version, so fall back to unmasking everything.
     if [[ "$INIT" == "systemd" ]]; then
         echo -e "${YELLOW}[i] Unmasking DNS resolver units...${RESET}"
-        if [[ -f "$RESOLVED_MASK_STATE_FILE" ]]; then
+        if [[ -f "$_mask_file" ]]; then
             while IFS= read -r unit; do
                 [[ -z "$unit" ]] && continue
                 resolver_unmask "$unit" 2>/dev/null && \
                     echo -e "    Unmasked: ${unit}" || \
                     echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
-            done < "$RESOLVED_MASK_STATE_FILE"
+            done < "$_mask_file"
         else
             for unit in "${RESOLVED_UNITS[@]}"; do
                 resolver_unmask "$unit" 2>/dev/null && \
@@ -715,7 +810,15 @@ fix_dns_stop() {
                     echo -e "    ${YELLOW}(skipped: ${unit})${RESET}"
             done
         fi
-        rm -f "$RESOLVED_MASK_STATE_FILE"
+        rm -f "$RESOLVED_MASK_STATE_FILE" "$LEGACY_RESOLVED_MASK_STATE_FILE"
+    fi
+
+    # Resolve effective resolv backup (prefer new, fallback to legacy)
+    local _resolv_backup=""
+    if [[ -f "$RESOLV_BACKUP" ]]; then
+        _resolv_backup="$RESOLV_BACKUP"
+    elif [[ -f "$LEGACY_RESOLV_BACKUP" ]]; then
+        _resolv_backup="$LEGACY_RESOLV_BACKUP"
     fi
 
     # Restore resolv.conf. Prefer the live stub only when systemd-resolved
@@ -723,24 +826,24 @@ fix_dns_stop() {
     # exist while the service is deliberately stopped, and symlinking to it
     # would leave DNS broken. This mirrors the resolver_start logic below.
     local _was_running_for_link
-    _was_running_for_link=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
+    _was_running_for_link=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || cat "$LEGACY_RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
     if [[ "$_was_running_for_link" == "yes" && -f /run/systemd/resolve/stub-resolv.conf ]]; then
         ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
         echo -e "${YELLOW}[i] resolv.conf → symlink to stub-resolv.conf.${RESET}"
-    elif [[ -f "$RESOLV_BACKUP" ]]; then
-        cp "$RESOLV_BACKUP" /etc/resolv.conf
+    elif [[ -n "$_resolv_backup" && -f "$_resolv_backup" ]]; then
+        cp "$_resolv_backup" /etc/resolv.conf
         echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
     else
         echo "nameserver 1.1.1.1" > /etc/resolv.conf.tmp
         mv -f /etc/resolv.conf.tmp /etc/resolv.conf
         echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
     fi
-    rm -f "$RESOLV_BACKUP"
+    rm -f "$RESOLV_BACKUP" "$LEGACY_RESOLV_BACKUP"
 
     # Restart the DNS resolver only if it was running before `start`.
     local was_running
-    was_running=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
-    rm -f "$RESOLVED_STATE_FILE"
+    was_running=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || cat "$LEGACY_RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
+    rm -f "$RESOLVED_STATE_FILE" "$LEGACY_RESOLVED_STATE_FILE"
 
     if [[ "$was_running" == "yes" ]]; then
         resolver_start
@@ -779,6 +882,7 @@ ipv6_available() {
 }
 
 save_iptables() {
+    ensure_state_dir
     # A failed save aborts start. A partial backup must not survive: if only
     # one family was saved, restore_iptables would flush BOTH and restore
     # just the one - destroying the other family's rules. Delete both files
@@ -786,7 +890,7 @@ save_iptables() {
     # valid baseline (fresh system, no rules to back up).
     #
     # Each dump lands in a .tmp sibling first and is renamed into place:
-    # rename(2) is atomic within /tmp, so an interrupt mid-save can never
+    # rename(2) is atomic within $STATE_DIR, so an interrupt mid-save can never
     # leave a truncated file behind that restore_iptables would mistake for
     # a complete backup. Stray .tmp files are inert - restore only ever
     # reads the final names.
@@ -811,7 +915,7 @@ save_iptables() {
         echo -e "${YELLOW}[i] IPv6 not available - skipping IPv6 backup (nothing to block or restore).${RESET}"
     fi
     # Root-only mode for the same reason as the resolv.conf backup above:
-    # firewall dumps expose network topology into a world-readable /tmp.
+    # firewall dumps expose network topology into a world-readable $STATE_DIR.
     chmod 600 "$IPTABLES_BACKUP" "$IP6TABLES_BACKUP" 2>/dev/null
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
 }
@@ -819,10 +923,16 @@ save_iptables() {
 restore_iptables() {
     # If `start` never saved a firewall (backups absent), there is nothing to
     # restore - flushing everything here would wipe the user's existing rules.
-    if [[ ! -f "$IPTABLES_BACKUP" && ! -f "$IP6TABLES_BACKUP" ]]; then
+    # Check legacy paths as fallback for mid-session upgrades.
+    if [[ ! -f "$IPTABLES_BACKUP" && ! -f "$LEGACY_IPTABLES_BACKUP" && ! -f "$IP6TABLES_BACKUP" && ! -f "$LEGACY_IP6TABLES_BACKUP" ]]; then
         echo -e "${YELLOW}[i] Firewall was not modified by this run - leaving it untouched.${RESET}"
         return 0
     fi
+    # Resolve effective backup paths (prefer new, fallback to legacy)
+    local _iptables_backup="$IPTABLES_BACKUP"
+    [[ -f "$_iptables_backup" ]] || _iptables_backup="$LEGACY_IPTABLES_BACKUP"
+    local _ip6tables_backup="$IP6TABLES_BACKUP"
+    [[ -f "$_ip6tables_backup" ]] || _ip6tables_backup="$LEGACY_IP6TABLES_BACKUP"
 
     local restored=0
 
@@ -840,25 +950,25 @@ restore_iptables() {
 
     # Stage 2: try to restore any custom pre-Tor rules from backup. Each
     # family reports separately so a failure is not silently absorbed.
-    if [[ -f "$IPTABLES_BACKUP" ]]; then
-        if iptables-restore < "$IPTABLES_BACKUP" 2>/dev/null; then
-            rm -f "$IPTABLES_BACKUP"
+    if [[ -f "$_iptables_backup" ]]; then
+        if iptables-restore < "$_iptables_backup" 2>/dev/null; then
+            rm -f "$IPTABLES_BACKUP" "$LEGACY_IPTABLES_BACKUP"
             echo -e "${YELLOW}[i] Custom iptables rules restored.${RESET}"
         else
             echo -e "${RED}[✗] FAILED to restore iptables rules from backup.${RESET}"
-            echo -e "    ${RED}Backup kept at ${IPTABLES_BACKUP} for manual restore.${RESET}"
+            echo -e "    ${RED}Backup kept at ${_iptables_backup} for manual restore.${RESET}"
             restored=1
         fi
     else
         echo -e "${YELLOW}[i] No iptables backup to restore.${RESET}"
     fi
-    if [[ -f "$IP6TABLES_BACKUP" ]]; then
-        if ip6tables-restore < "$IP6TABLES_BACKUP" 2>/dev/null; then
-            rm -f "$IP6TABLES_BACKUP"
+    if [[ -f "$_ip6tables_backup" ]]; then
+        if ip6tables-restore < "$_ip6tables_backup" 2>/dev/null; then
+            rm -f "$IP6TABLES_BACKUP" "$LEGACY_IP6TABLES_BACKUP"
             echo -e "${YELLOW}[i] Custom ip6tables rules restored.${RESET}"
         else
             echo -e "${RED}[✗] FAILED to restore ip6tables rules from backup.${RESET}"
-            echo -e "    ${RED}Backup kept at ${IP6TABLES_BACKUP} for manual restore.${RESET}"
+            echo -e "    ${RED}Backup kept at ${_ip6tables_backup} for manual restore.${RESET}"
             restored=1
         fi
     else
@@ -1141,8 +1251,8 @@ cmd_stop() {
     # backup actually exists - catching the gap upfront instead of mid-
     # restore, while exotic systems with no backups at all can still stop.
     local need=(iptables ip6tables)
-    [[ -f "$IPTABLES_BACKUP" ]] && need+=(iptables-restore)
-    [[ -f "$IP6TABLES_BACKUP" ]] && need+=(ip6tables-restore)
+    [[ -f "$IPTABLES_BACKUP" || -f "$LEGACY_IPTABLES_BACKUP" ]] && need+=(iptables-restore)
+    [[ -f "$IP6TABLES_BACKUP" || -f "$LEGACY_IP6TABLES_BACKUP" ]] && need+=(ip6tables-restore)
     check_net_tools "${need[@]}"
     echo -e "${CYAN}[→] Restoring normal internet...${RESET}\n"
 
@@ -1172,7 +1282,7 @@ cmd_stop() {
     if [[ $fw_restored -ne 0 ]]; then
         echo -e "\n${RED}${BOLD}[✗] Firewall rules could NOT be fully restored.${RESET}"
         echo -e "    ${RED}Your system may be missing its custom firewall rules.${RESET}"
-        echo -e "    ${RED}Restore manually from the backups listed above (${IPTABLES_BACKUP} / ${IP6TABLES_BACKUP}).${RESET}"
+        echo -e "    ${RED}Restore manually from the backups listed above (${IPTABLES_BACKUP} / ${IP6TABLES_BACKUP} or legacy /tmp).${RESET}"
         exit 1
     fi
 
@@ -1263,10 +1373,10 @@ cmd_status() {
         fi
     fi
 
-    # Show configured exit node country from state file
-    if [[ -f "$COUNTRY_FILE" ]]; then
+    # Show configured exit node country from state file (check legacy fallback)
+    if [[ -f "$COUNTRY_FILE" || -f "$LEGACY_COUNTRY_FILE" ]]; then
         local saved_country
-        saved_country=$(cat "$COUNTRY_FILE")
+        saved_country=$(cat "$COUNTRY_FILE" 2>/dev/null || cat "$LEGACY_COUNTRY_FILE" 2>/dev/null)
         if [[ "$saved_country" == "random" ]]; then
             echo -e "  Exit node country: ${CYAN}${BOLD}Random (no country filter)${RESET}"
         else
@@ -1327,7 +1437,7 @@ cmd_newnode() {
     else
         # If no country given, check if one was previously pinned and clear it
         local prev
-        prev=$(cat "$COUNTRY_FILE" 2>/dev/null || echo "random")
+        prev=$(cat "$COUNTRY_FILE" 2>/dev/null || cat "$LEGACY_COUNTRY_FILE" 2>/dev/null || echo "random")
         if [[ "$prev" != "random" ]]; then
             echo -e "${CYAN}[→] Switching to a new random exit node (clearing previous pin: ${prev^^})...${RESET}\n"
         else
