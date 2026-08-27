@@ -484,7 +484,7 @@ cmd_check() {
     # ── State files ─────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── State files ─────────────────────────${RESET}"
     echo -e "  State dir: ${STATE_DIR} $([[ -d "$STATE_DIR" ]] && echo "${GREEN}(exists)${RESET}" || echo '(not present)')"
-    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE RESOLVED_MASK_STATE_FILE; do
+    for f in IPTABLES_BACKUP IP6TABLES_BACKUP RESOLV_BACKUP RESOLVED_STATE_FILE COUNTRY_FILE TOR_STATE_FILE RESOLVED_MASK_STATE_FILE COMMAND_LOCK_FILE; do
         local path="${!f}"
         if [[ -f "$path" ]]; then
             echo -e "  ${f}:  ${path}  ${GREEN}(exists)${RESET}"
