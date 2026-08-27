@@ -63,12 +63,12 @@ With tor-route:
 
 | Traffic type | Treatment |
 |---|---|
-| TCP (HTTP, HTTPS, SSH, …) | Redirected through Tor |
-| DNS queries | Redirected to Tor's internal DNS resolver |
-| UDP (WebRTC, QUIC, STUN) | Blocked entirely (cannot be anonymised by Tor) |
-| IPv6 | Blocked entirely (Tor does not support IPv6 transparent proxying) |
-| LAN / private ranges | Passed through directly (local network still works) |
-| Tor's own traffic | Passed through untouched (prevents a redirect loop) |
+| TCP (HTTP, HTTPS, SSH, …) | Redirected through Tor (`-m state --state NEW` only; already-established connections keep their original path) |
+| DNS queries | Redirected to Tor's internal DNS resolver (`udp/tcp --dport 53 → 127.0.0.1:5353`, except Tor's own traffic) |
+| UDP (WebRTC, QUIC, STUN) | Blocked by default (`OUTPUT -p udp -j DROP` after allowing Tor's own UDP, `127.0.0.1:53`, and LAN/private ranges — see below; cannot be anonymised by Tor) |
+| IPv6 | Blocked entirely (`ip6tables -P INPUT/OUTPUT/FORWARD DROP`; Tor does not support IPv6 transparent proxying) |
+| LAN / private ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | Passed through directly (local network still works; applies to both TCP `RETURN` and UDP `ACCEPT`) |
+| Tor's own traffic | Passed through untouched (`-m owner --uid-owner <tor>` `RETURN`/`ACCEPT` prevents a redirect loop) |
 | Already-established TCP connections | Left on their original path — only *new* connections are redirected |
 
 The rules apply only to traffic **originating from this machine**. Traffic from other devices on your local network is not routed through Tor.
@@ -163,9 +163,9 @@ sudo tor-route stop
 
 > **Concurrency and crash safety.** `start`, `stop`, and `newnode` first try to take a non-blocking `flock` on `/tmp/tor-route.lock` (`tor-route.sh:62,277`). The helper refuses a pre-existing symlink at that path, creates the file `0600`, and holds file descriptor 9 for the whole run — the kernel releases it on exit, so stale locks cannot happen. A second concurrent invocation exits immediately with `[✗] Another tor-route command is already running.` Read-only commands (`status`, `check`, `countries`) never take the lock.
 
-> **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place (`tor-route.sh:682,769,793`), and every backup in `/tmp` is `chmod 600`. A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
+> **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place (`tor-route.sh:682,734,794,799,803,808` — `resolv.conf.tmp` for both the `127.0.0.1` and the `1.1.1.1` fallback, `iptables-pre-tor.rules.tmp`/`ip6tables-pre-tor.rules.tmp`), and every backup in `/tmp` is `chmod 600` (`tor-route.sh:288,647,815,1059`). A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
 
-> **External HTTPS requests.** The script only contacts four hosts, all over `https://`, and only to implement the features below. When routing is active the requests themselves go through Tor, so the remote host only ever sees the exit IP; when routing is off they go direct. See the table under step 7.
+> **External HTTPS requests.** The script only contacts four hosts, all over `https://` (`tor-route.sh:977,986,999,1109` — `api.ipify.org` with `-4`, `api6.ipify.org` with `-6`, `check.torproject.org` with `-4`, `ipwho.is/<ip>` without an explicit `-4`/`-6` flag but still covered by the IPv6 `DROP` policy and the `OUTPUT` redirect when routing is active), and only to implement the features below. When routing is active the requests themselves go through Tor (via the `nat OUTPUT` redirect), so the remote host only ever sees the exit IP; when routing is off they go direct. See the table under step 7.
 
 ### `start [CC]`
 
@@ -173,7 +173,7 @@ sudo tor-route stop
 2. Appends transparent proxy settings to `/etc/tor/torrc`. If a country code was given, also adds `ExitNodes {cc}` and `StrictNodes 1` to pin exit nodes to that country, and saves the active country (or `"random"`) to a state file so `status` and `newnode` can read it back.
 3. Starts the Tor service (via `systemctl`, `rc-service`, `sv`, or `/etc/init.d/tor` depending on the init system) and waits for it to be ready — either the log reports "Bootstrapped 100%" or the trans proxy port starts listening. Whether Tor was already running before is recorded to a state file so `stop` can put the service back the way it was found.
 4. Verifies that Tor is actually listening on both expected ports.
-5. Backs up existing `iptables` and `ip6tables` rules via `.tmp` siblings (atomic `mv`, see note above), then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched; empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect and aborts (with a full restore) if they did not — it never claims success while IPv6 could still leak.
+5. Backs up existing `iptables` and `ip6tables` rules via `.tmp` siblings (atomic `mv`, see note above `tor-route.sh:794,799,803,808`), then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched (`tor-route.sh:794,804`); empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect (`ip6tables -L OUTPUT -n | grep "policy DROP"` `tor-route.sh:948`) and aborts (with a full `restore_iptables` `tor-route.sh:1093`) if they did not — it never claims success while IPv6 could still leak.
 6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it — recording which units were not already masked beforehand so `stop` only undoes its own changes and leaves deliberately-masked units alone. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
 7. Announces success only once a request actually travels through Tor. The probe tries `https://api.ipify.org` (`-4`, short timeout) and falls back to `https://check.torproject.org` if the first host is down or blocked. Afterwards `show_ip` (`tor-route.sh:974`) fetches the public IPv4 from `https://api.ipify.org`, enriches it via `https://ipwho.is/<ip>` for country/ISP (only the IP already displayed is sent), and checks `https://api6.ipify.org` (`-6`) — if it answers, IPv6 is leaking. All four hosts are `https://` only. If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet.
 
@@ -195,34 +195,34 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see [Shared notes](#shared-notes). A second concurrent invocation is refused.
 
 1. Detects and displays the init system.
-2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only, so unrelated established connections are left alone. Afterwards it verifies the Tor redirect is actually gone; if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions instead of shutting down Tor and black-holing traffic.
-3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks the DNS resolver units it masked itself — systemd only; units that were already masked before `start` stay masked — and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live stub-resolv.conf when available (dynamic, stays in sync with network changes), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`). If the DNS was never modified, it is left untouched.
+2. Restores the firewall, but only if `start` actually modified it (`tor-route.sh:823` guard): if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT (`tor-route.sh:835`), then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (`conntrack -D -p tcp --reply-port-src 9040` / `-p udp --reply-port-src 5353` `tor-route.sh:880`, if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only (`--reply-port-src`, not `conntrack -F`), so unrelated established connections (including the SSH session running `stop`) are left alone. Afterwards it verifies the Tor redirect is actually gone (`is_routing_active` `tor-route.sh:1163`); if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions (`tor-route.sh:602`) instead of shutting down Tor and black-holing traffic.
+3. Restores DNS, but only if `start` actually modified it (it tracks this via state files `tor-route.sh:694`): unmasks the DNS resolver units it masked itself — systemd only; units that were already masked before `start` stay masked (`tor-route.sh:704`) — and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live `stub-resolv.conf` **only when `systemd-resolved` was running before `start`** and the stub file exists (`tor-route.sh:726` — if the resolver was deliberately stopped before `start`, the stub may exist but symlinking would leave DNS broken, so the static backup is used instead), then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1` `tor-route.sh:734`). If the DNS was never modified, it is left untouched.
 4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 5. Restores the Tor service to how it was found: stopped if Tor wasn't running before `start`, restarted with the original configuration (after the torrc block is removed) if it was.
 6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
 
-Displays a live summary:
-- The **detected init system** (systemd, openrc, runit, or sysvinit)
-- Whether the Tor service is running
-- Whether TCP traffic is being routed through Tor
-- Whether UDP / WebRTC is blocked (checked only while routing is active, and matched against the script's own rules)
-- Whether IPv6 is blocked (chain policy, checked only while routing is active)
-- Whether the DNS resolver is masked (systemd) or redirected via `/etc/resolv.conf` (other inits) — only shown while routing is active; if routing is off, `status` just shows the resolver's normal state
-- The **configured exit node country** (pinned code or `Random`)
-- Whether Tor is listening on the correct ports
-- Your current public IPv4, country, ISP, and IPv6 leak status
+Displays a live summary (`tor-route.sh:1204`):
+- The **detected init system** (systemd, openrc, runit, or sysvinit) (`require_init` `tor-route.sh:193,221`)
+- Whether the Tor service is running (`service_tor_running` `tor-route.sh:1211`)
+- Whether TCP traffic is being routed through Tor (`is_routing_active` `tor-route.sh:1215` — `iptables -t nat -L OUTPUT -n | grep REDIRECT.*9040` `tor-route.sh:970`)
+- Whether UDP / WebRTC is blocked (checked only while routing is active, and matched against the script's own rules `iptables -S OUTPUT | grep "-p udp -j DROP"` `tor-route.sh:1221`)
+- Whether IPv6 is blocked (chain policy `ip6tables -L OUTPUT | head -n1 | grep "policy DROP"` `tor-route.sh:1227`, checked only while routing is active)
+- Whether the DNS resolver is masked (systemd `systemctl is-enabled ... != masked` `tor-route.sh:1242`) or redirected via `/etc/resolv.conf` (`grep ^nameserver 127.0.0.1` `tor-route.sh:1249`) — only shown while routing is active; if routing is off, `status` just shows the resolver's normal state (`resolver_is_active` `tor-route.sh:1259`)
+- The **configured exit node country** (pinned code or `Random` from `COUNTRY_FILE` `tor-route.sh:1267`)
+- Whether Tor is listening on the correct ports (`verify_tor_ports` `ss -tlnp :9040` / `ss -ulnp :5353` `tor-route.sh:758` — only if service is running `tor-route.sh:1279`)
+- Your current public IPv4, country, ISP, and IPv6 leak status (`show_ip` `tor-route.sh:974,1283`)
 
 ### `newnode [CC]`
 
-Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while **both** the Tor service is running (`tor-route.sh:1298` — `service_tor_running`) **and** routing is active (`tor-route.sh:1307` — `is_routing_active`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees and would leave stale `tor-route-country` state. Updates torrc with the new country preference (or clears the pin if no code is given `tor-route.sh:1328`), then sends a `SIGHUP` signal to the Tor process (`service_tor_reload` `tor-route.sh:116` — `systemctl kill --signal=SIGHUP` / `rc-service reload` / `sv reload`). This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
 ```
 
-The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. `newnode` records your current IP before reloading Tor, then waits (up to ~30 s) until the IP actually changes before showing the `New:` address. If Tor reuses the same exit node and the IP doesn't change, it warns instead of claiming success.
+The *exit node* is the server websites see as your IP. A new circuit means a new exit node and therefore a new public IP address and country. `newnode` records your current IP before reloading Tor (`curl -s --max-time 5 -4 https://api.ipify.org` `tor-route.sh:1343`), then waits (up to ~30 s `tor-route.sh:1365` `curl -sf --max-time 2 -4 https://api.ipify.org` per second) until the IP actually changes before showing the `New:` address (`show_ip` `tor-route.sh:974,1345,1381`). If Tor reuses the same exit node and the IP doesn't change, or the old IP could not be read before switching (then waits a fixed `15 s`), it warns instead of claiming success.
 
 ### `check`
 
@@ -245,9 +245,9 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 |---|---|---|
 | `start` then `start` again after the first has **finished** (same terminal, still routed) | **Sequential guard:** refuses with `Tor routing is already active` — backups are not overwritten (`tor-route.sh:1024`), exits `0` | Run `stop` first, or `newnode` to change exit |
 | `start` and `start` at the **same time** (two terminals, overlapping) | **Flock lock:** second is refused immediately by the `flock` on `/tmp/tor-route.lock` (`tor-route.sh:277`) with `[✗] Another tor-route command is already running`, exits `1`; no state is changed | Wait for the first to finish and retry |
-| `stop` with no prior `start` | Firewall/DNS restore no-ops (`tor-route.sh:822,693`); Tor is stopped if running (`tor-route.sh:591` — pre-existing `tor` cannot be distinguished without a prior `start`) | Harmless except it stops a system `tor` that was already running |
-| `stop` twice in a row | Second run is a full no-op — `was not modified - leaving it untouched` and only re-verifies connectivity | Yes, but it will not repair a failed first `stop` beyond the re-check |
-| `newnode` before `start` | Refused with `Tor routing is not active` (`tor-route.sh:1285`); `torrc` is not touched | Run `start` first |
+| `stop` with no prior `start` | Firewall/DNS restore no-ops (`tor-route.sh:823,694`); Tor is stopped if running (`tor-route.sh:591` — pre-existing `tor` cannot be distinguished without a prior `start`) | Harmless except it stops a system `tor` that was already running |
+| `stop` twice in a row | Second run is almost a full no-op — firewall/DNS print `was not modified - leaving it untouched` and only re-verifies connectivity (`tor-route.sh:823,694`); `restore_tor_service` still attempts `service_tor_stop` (`tor-route.sh:591`) but is harmless if already stopped | Yes, but it will not repair a failed first `stop` beyond the re-check; if the first `stop` failed to restore (`iptables-restore` error, backup kept at `/tmp/iptables-pre-tor.rules`), the second run will retry the restore instead of no-oping |
+| `newnode` before `start` | Refused with `Tor is not running` (`tor-route.sh:1298`) or `Tor routing is not active` (`tor-route.sh:1308`); `torrc` is not touched | Run `start` first |
 | Any two of `start`/`stop`/`newnode` overlapping (e.g. `start` + `stop`) | Same flock as above — second is refused immediately; read-only `status`/`check`/`countries` never take the lock | Wait and retry |
 
 ---
@@ -267,7 +267,7 @@ The script blocks WebRTC UDP at the OS level, but some browsers can still expose
 
 ### UDP applications
 
-Because Tor cannot carry UDP traffic (other than its own internal DNS), all non-DNS UDP is dropped while Tor routing is active. Applications that rely on UDP — such as VoIP clients, some games, or QUIC-based services — will not work until you run `stop`.
+Because Tor cannot carry UDP traffic (other than its own internal DNS), all non-DNS UDP is dropped while Tor routing is active (`OUTPUT -p udp -j DROP` `tor-route.sh:934` after `ACCEPT` for Tor's UID, `127.0.0.1:53`, and `NON_TOR` `tor-route.sh:929` — so UDP to LAN/private ranges still works). Applications that rely on UDP — such as VoIP clients, some games, or QUIC-based services — will not work over the internet until you run `stop`.
 
 ### Tor is not a VPN
 
@@ -326,11 +326,11 @@ If all lines show ✓ but the IP check website still shows your real IP, either 
 
 **DNS not resolving after `stop`**
 
-The script prefers a symlink to systemd-resolved's live stub-resolv.conf over a static backup. The DNS resolver can take a moment to fully start after `stop` — the command now waits and verifies direct connectivity automatically, warning you if the resolver still isn't answering. If it still doesn't resolve:
+The script prefers a symlink to systemd-resolved's live `stub-resolv.conf` only when `systemd-resolved` was running before `start` (`tor-route.sh:726`); otherwise it restores the static backup or the `1.1.1.1` fallback. The DNS resolver can take a moment to fully start after `stop` — the command now waits and verifies direct connectivity automatically (`10× curl -4 https://api.ipify.org` `tor-route.sh:1183`), warning you if the resolver still isn't answering. If it still doesn't resolve:
 
 - Give it a few more seconds and re-check with `sudo tor-route status` — the resolver may simply still be starting.
 - If it still fails, restart the DNS resolver directly (e.g. `systemctl restart systemd-resolved` on systemd).
-- Running `stop` again will **not** help — since the first `stop` already removed the backups, a second `stop` no longer flushes rules or resets policies; it only re-verifies connectivity.
+- Running `stop` again will **usually not** help — since a successful first `stop` already removed the backups, a second `stop` no longer flushes rules or resets policies (`tor-route.sh:823,694`); it only re-verifies connectivity and retries `service_tor_stop`. If the first `stop` failed with `FAILED to restore iptables rules` (backup kept), a second `stop` will retry the `iptables-restore`.
 
 **`newnode` does not change the IP**
 
@@ -338,11 +338,11 @@ Tor may reuse the same exit node for a short period. Wait 15 seconds and try aga
 
 **Another tor-route command is already running**
 
-The mutating commands (`start`, `stop`, `newnode`) are serialized with a lock. A second one prints `[✗] Another tor-route command is already running.` — wait for the first to finish, then retry. A stray symlink at `/tmp/tor-route.lock` is refused for security; remove it manually if you created it.
+The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blocking `flock` on `/tmp/tor-route.lock` (`tor-route.sh:277`). A second one prints `[✗] Another tor-route command is already running.` (`tor-route.sh:292`) — wait for the first to finish, then retry. A stray symlink at `/tmp/tor-route.lock` is refused for security (`tor-route.sh:282`); remove it manually if you created it.
 
 **Geo lookup shows the wrong country**
 
-`status` (and the `show_ip` helper) fetches your public IP from `api.ipify.org` and then resolves the country/ISP via `https://ipwho.is/<ip>` — when routing is active that second request also goes through Tor, so the lookup sees the *exit* IP. When routing is off it goes direct and sees your real IP. No extra data is sent; only the IP already displayed is looked up.
+`status` (and the `show_ip` helper `tor-route.sh:974`) fetches your public IP from `https://api.ipify.org` (`-4` `tor-route.sh:977`) and then resolves the country/ISP via `https://ipwho.is/<ip>` (`tor-route.sh:986` — no explicit `-4`/`-6`, but still via the `nat OUTPUT` redirect / `DROP` policy when routing is active) — when routing is active that second request also goes through Tor, so the lookup sees the *exit* IP. When routing is off it goes direct and sees your real IP. No extra data is sent; only the IP already displayed is looked up.
 
 ---
 
