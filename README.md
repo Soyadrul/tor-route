@@ -189,7 +189,7 @@ Prints a formatted table of all supported [ISO 3166-1 alpha-2](https://en.wikipe
 
 ### `stop`
 
-Takes the same advisory lock as `start` (see note above) and refuses to run concurrently.
+Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see the `Concurrency and crash safety` note at the top of this section. A second concurrent invocation is refused.
 
 1. Detects and displays the init system.
 2. Restores the firewall, but only if `start` actually modified it: if a backup exists, flushes all iptables/ip6tables rules, resets ip6tables default policies to ACCEPT, then restores your custom pre-Tor rules from backup. Each family is restored independently — if a restore fails, the backup is kept for manual recovery and `stop` exits with an error instead of claiming success. If the firewall was never modified by this script (no backup exists), it is left untouched — it never flushes a firewall it didn't create. Removes conntrack entries pointing at Tor's ports (if `conntrack` is available) that could otherwise redirect stale connections to the now-closed Tor ports — scoped to the Tor ports only, so unrelated established connections are left alone. Afterwards it verifies the Tor redirect is actually gone; if the rules survive because the backup files were deleted externally mid-session, it aborts with manual recovery instructions instead of shutting down Tor and black-holing traffic.
@@ -213,7 +213,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Takes the same advisory lock as `start` (see note above). Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Like `start`, serialized by the advisory `flock` on `/tmp/tor-route.lock` — see the `Concurrency and crash safety` note at the top of this section. Detects and displays the init system. Only runs while routing is active (i.e. after `start`); it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process. This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
