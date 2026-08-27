@@ -189,11 +189,12 @@ If routing is already active (the Tor redirect rule is present), `start` refuses
 
 | Situation | What the script does | Safe to retry? |
 |---|---|---|
-| `start` while already routed | Refuses with `Tor routing is already active` — backups are not overwritten (`tor-route.sh:1024`) | Run `stop` first, or `newnode` to change exit |
+| `start` then `start` again after the first has **finished** (same terminal, still routed) | **Sequential guard:** refuses with `Tor routing is already active` — backups are not overwritten (`tor-route.sh:1024`), exits `0` | Run `stop` first, or `newnode` to change exit |
+| `start` and `start` at the **same time** (two terminals, overlapping) | **Flock lock:** second is refused immediately by the `flock` on `/tmp/tor-route.lock` (`tor-route.sh:277`) with `[✗] Another tor-route command is already running`, exits `1`; no state is changed | Wait for the first to finish and retry |
 | `stop` with no prior `start` | Firewall/DNS restore no-ops (`tor-route.sh:822,693`); Tor is stopped if running (`tor-route.sh:591` — pre-existing `tor` cannot be distinguished without a prior `start`) | Harmless except it stops a system `tor` that was already running |
 | `stop` twice in a row | Second run is a full no-op — `was not modified - leaving it untouched` and only re-verifies connectivity | Yes, but it will not repair a failed first `stop` beyond the re-check |
 | `newnode` before `start` | Refused with `Tor routing is not active` (`tor-route.sh:1285`); `torrc` is not touched | Run `start` first |
-| Any two of `start`/`stop`/`newnode` overlapping | Second is refused immediately by the `flock` on `/tmp/tor-route.lock` (`tor-route.sh:277`); read-only `status`/`check`/`countries` never take the lock | Wait and retry |
+| Any two of `start`/`stop`/`newnode` overlapping (e.g. `start` + `stop`) | Same flock as above — second is refused immediately; read-only `status`/`check`/`countries` never take the lock | Wait and retry |
 
 ### `countries`
 
