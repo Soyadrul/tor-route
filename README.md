@@ -349,11 +349,13 @@ The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blo
 
 ## File locations
 
+State files live under `$STATE_DIR` (`/run/tor-route`, fallback `/tmp/tor-route` when `/run` is absent):
+
 | Path | Purpose |
 |---|---|
 | `/etc/tor/torrc` | Tor configuration — the script appends and removes its own block |
 | `/etc/resolv.conf` | DNS resolver config — replaced during `start`, restored on `stop` |
-| `/run/tor-route/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active; fallback `/tmp/tor-route` when `/run` is absent) |
+| `/run/tor-route/iptables-pre-tor.rules` | IPv4 firewall backup (exists only while Tor routing is active) |
 | `/run/tor-route/ip6tables-pre-tor.rules` | IPv6 firewall backup (exists only while Tor routing is active) |
 | `/run/tor-route/resolv.conf.pre-tor` | resolv.conf backup (exists only while Tor routing is active) |
 | `/run/tor-route/country` | Records the active exit node country (or `random`) while Tor routing is active |
