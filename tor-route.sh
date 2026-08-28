@@ -731,8 +731,9 @@ fix_dns_start() {
     chmod 600 "$RESOLVED_STATE_FILE" 2>/dev/null || true
 
     # Back up resolv.conf before touching it. Root-only mode: the dump can
-    # reveal internal nameserver topology, and /tmp is world-readable by
-    # default. (No global umask change - /etc/resolv.conf itself must stay
+    # reveal internal nameserver topology, and $STATE_DIR is 0700 (fallback
+    # /tmp/tor-route lives inside world-readable /tmp, hence the strict
+    # dir mode). (No global umask change - /etc/resolv.conf itself must stay
     # readable by every process.)
     cp --dereference /etc/resolv.conf "$RESOLV_BACKUP" 2>/dev/null
     chmod 600 "$RESOLV_BACKUP" 2>/dev/null

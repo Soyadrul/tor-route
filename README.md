@@ -234,7 +234,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **Tor user** — which system usernames were tried, which one matched
 - **Tor service** — running/stopped, listening TCP and DNS ports
 - **torrc** — path, permissions, and whether the script's config block is present
-- **State files** — which of the 7 backup/state files exist (firewall, DNS, country, service and mask state)
+- **State files** — which of the 8 state/lock files exist (firewall, DNS, country, service, mask state and lock) in `/run/tor-route` (fallback `/tmp/tor-route`)
 - **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy
 - **DNS** — resolv.conf type (symlink/regular file), line count, nameserver count (no actual addresses)
 - **Tor log** — last 5 lines of journal/log output (a missing log is a note, not a failed check)
