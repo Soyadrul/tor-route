@@ -23,13 +23,19 @@ TOR_TRANS_PORT=9040
 TOR_DNS_PORT=5353
 TOR_USERS=(tor debian-tor toranon _tor)
 TOR_USER=""
-for _tu in "${TOR_USERS[@]}"; do
-    TOR_UID=$(id -u "$_tu" 2>/dev/null)
-    if [[ -n "$TOR_UID" ]]; then
-        TOR_USER="$_tu"
-        break
-    fi
-done
+TOR_UID=""
+detect_tor_user() {
+    TOR_USER=""
+    TOR_UID=""
+    for _tu in "${TOR_USERS[@]}"; do
+        TOR_UID=$(id -u "$_tu" 2>/dev/null)
+        if [[ -n "$TOR_UID" ]]; then
+            TOR_USER="$_tu"
+            break
+        fi
+    done
+}
+detect_tor_user
 NON_TOR="127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 TORRC="/etc/tor/torrc"
 
@@ -255,6 +261,8 @@ require_root() {
 }
 
 check_dependencies() {
+    # Re-detect in case tor was installed after script load
+    [[ -z "$TOR_UID" ]] && detect_tor_user
     local missing=()
     for cmd in tor iptables ip6tables iptables-save ip6tables-save iptables-restore ip6tables-restore curl ss; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
@@ -1037,6 +1045,11 @@ restore_iptables() {
 }
 
 apply_iptables() {
+    [[ -z "$TOR_UID" ]] && detect_tor_user
+    if [[ -z "$TOR_UID" ]]; then
+        echo -e "${RED}[✗] Tor user not found (looked for: ${TOR_USERS[*]}).${RESET}" >&2
+        return 1
+    fi
     # Every mutation runs under set -e inside a subshell: the FIRST failing
     # command aborts and surfaces as a failure here, instead of half a
     # ruleset silently passing the later checks. The caller unwinds via
