@@ -346,6 +346,8 @@ migrate_legacy_state() {
     # Only moves a legacy file when the new path does not yet exist, so a
     # newer session is never overwritten. Best-effort; failures are silent.
     local legacy new pair
+    # Avoid creating empty $STATE_DIR when no migration is needed
+    local need_migrate=0
     for pair in \
         "$LEGACY_IPTABLES_BACKUP:$IPTABLES_BACKUP" \
         "$LEGACY_IP6TABLES_BACKUP:$IP6TABLES_BACKUP" \
@@ -357,7 +359,23 @@ migrate_legacy_state() {
         legacy="${pair%%:*}"
         new="${pair##*:}"
         if [[ -f "$legacy" && ! -e "$new" ]]; then
-            ensure_state_dir
+            need_migrate=1
+            break
+        fi
+    done
+    [[ $need_migrate -eq 0 ]] && return 0
+    ensure_state_dir
+    for pair in \
+        "$LEGACY_IPTABLES_BACKUP:$IPTABLES_BACKUP" \
+        "$LEGACY_IP6TABLES_BACKUP:$IP6TABLES_BACKUP" \
+        "$LEGACY_RESOLV_BACKUP:$RESOLV_BACKUP" \
+        "$LEGACY_RESOLVED_STATE_FILE:$RESOLVED_STATE_FILE" \
+        "$LEGACY_COUNTRY_FILE:$COUNTRY_FILE" \
+        "$LEGACY_TOR_STATE_FILE:$TOR_STATE_FILE" \
+        "$LEGACY_RESOLVED_MASK_STATE_FILE:$RESOLVED_MASK_STATE_FILE"; do
+        legacy="${pair%%:*}"
+        new="${pair##*:}"
+        if [[ -f "$legacy" && ! -e "$new" ]]; then
             mv -f "$legacy" "$new" 2>/dev/null || {
                 cp -a "$legacy" "$new" 2>/dev/null && rm -f "$legacy" 2>/dev/null || true
             }
