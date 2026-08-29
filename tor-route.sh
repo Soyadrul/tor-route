@@ -497,8 +497,8 @@ cmd_check() {
     else
         echo -e "  Status:    ${YELLOW}Not running${RESET}"
     fi
-    echo -e "  Ports:     $(ss -tlnp 2>/dev/null | grep tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
-    echo -e "  DNS port:  $(ss -ulnp 2>/dev/null | grep tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
+    echo -e "  Ports:     $(ss -tlnp 2>/dev/null | grep -w tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
+    echo -e "  DNS port:  $(ss -ulnp 2>/dev/null | grep -w tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
 
     # ── Torrc ───────────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── torrc ───────────────────────────────${RESET}"
