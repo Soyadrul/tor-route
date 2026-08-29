@@ -1136,9 +1136,14 @@ apply_iptables() {
 
 # 0 if the Tor transparent redirect is currently present in iptables,
 # non-zero otherwise. Also used by `status`/`check`/`start` as the canonical
-# "is Tor routing active?" test. The -n flag avoids slow reverse DNS
-# lookups that plain -L would trigger.
+# "is Tor routing active?" test.
 is_routing_active() {
+    # -S prints rules as `-A ... -j REDIRECT` and is stable across
+    # iptables-legacy vs iptables-nft; -L output varies and needs -n to
+    # avoid reverse DNS lookups. Try -S first, fallback to -L.
+    if iptables -t nat -S OUTPUT 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"; then
+        return 0
+    fi
     iptables -t nat -L OUTPUT -n 2>/dev/null | grep -q "REDIRECT.*${TOR_TRANS_PORT}"
 }
 
