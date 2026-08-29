@@ -739,6 +739,15 @@ interrupt_unwind() {
 # ── DNS resolver handling ─────────────────────────────────────────────────────
 fix_dns_start() {
     ensure_state_dir
+    # Refuse symlinked state files inside $STATE_DIR — an attacker with
+    # prior write to the directory could pre-create them as symlinks to
+    # sensitive files; `>` and `cp` would otherwise follow them.
+    for _f in "$RESOLVED_STATE_FILE" "$RESOLV_BACKUP" "$RESOLVED_MASK_STATE_FILE"; do
+        if [[ -L "$_f" ]]; then
+            echo -e "${RED}[✗] State file is a symlink - refusing (${_f}).${RESET}" >&2
+            exit 1
+        fi
+    done
     # Record whether a DNS resolver was running before we touch anything.
     # On systemd this checks systemd-resolved; on other inits it's always "no".
     if resolver_running; then
@@ -755,6 +764,10 @@ fix_dns_start() {
     # /tmp/tor-route lives inside world-readable /tmp, hence the strict
     # dir mode). (No global umask change - /etc/resolv.conf itself must stay
     # readable by every process.)
+    if [[ -L "$RESOLV_BACKUP" ]]; then
+        echo -e "${RED}[✗] Backup file is a symlink - refusing (${RESOLV_BACKUP}).${RESET}" >&2
+        exit 1
+    fi
     cp --dereference /etc/resolv.conf "$RESOLV_BACKUP" 2>/dev/null
     chmod 600 "$RESOLV_BACKUP" 2>/dev/null
 
