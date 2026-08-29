@@ -447,6 +447,7 @@ cmd_check() {
     banner
     require_root check
     require_init
+    detect_tor_user
 
     local all_ok=0
 
@@ -466,8 +467,12 @@ cmd_check() {
             v=$("$cmd" --version 2>/dev/null | head -1)
             echo -e "    ${GREEN}✓${RESET} ${cmd}  ${YELLOW}(${v:-version unknown})${RESET}"
         else
-            echo -e "    ${RED}✗${RESET} ${cmd}  ${YELLOW}(missing)${RESET}"
-            all_ok=1
+            if [[ "$cmd" == "tor" ]] && is_routing_active 2>/dev/null; then
+                echo -e "    ${YELLOW}⚠${RESET} ${cmd}  ${YELLOW}(missing but routing active — stop still works)${RESET}"
+            else
+                echo -e "    ${RED}✗${RESET} ${cmd}  ${YELLOW}(missing)${RESET}"
+                all_ok=1
+            fi
         fi
     done
 
@@ -477,8 +482,12 @@ cmd_check() {
     if [[ -n "$TOR_UID" ]]; then
         echo -e "  Found:     ${TOR_USER} (UID ${TOR_UID})"
     else
-        echo -e "  Found:     ${RED}none${RESET}"
-        all_ok=1
+        if is_routing_active 2>/dev/null; then
+            echo -e "  Found:     ${YELLOW}none (routing active — stop still works)${RESET}"
+        else
+            echo -e "  Found:     ${RED}none${RESET}"
+            all_ok=1
+        fi
     fi
 
     # ── Tor service ────────────────────────────────────────────────────────
