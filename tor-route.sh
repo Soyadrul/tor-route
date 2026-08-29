@@ -814,7 +814,7 @@ fix_dns_start() {
             # non-zero - never append a fallback with || here, or a masked
             # unit would be captured as "masked"$'\n'"not-found".
             prev=$(systemctl is-enabled "$unit" 2>/dev/null)
-            if [[ "$prev" != "masked" ]]; then
+            if [[ "$prev" != *"masked"* ]]; then
                 echo "$unit" >> "$RESOLVED_MASK_STATE_FILE"
             fi
             resolver_mask_now "$unit" 2>/dev/null && \
