@@ -639,6 +639,10 @@ configure_torrc() {
     local country="${1:-}"
 
     ensure_state_dir
+    if [[ -L "$COUNTRY_FILE" ]]; then
+        echo -e "${RED}[✗] State file is a symlink - refusing (${COUNTRY_FILE}).${RESET}" >&2
+        exit 1
+    fi
     strip_torrc_block
 
     if [[ -n "$country" ]]; then
@@ -658,6 +662,7 @@ StrictNodes 1
 EOF
         echo -e "${YELLOW}[i] torrc: TransPort=${TOR_TRANS_PORT}, DNSPort=${TOR_DNS_PORT}, ExitNodes={${country^^}}${RESET}"
         echo "${country}" > "$COUNTRY_FILE"
+        chmod 600 "$COUNTRY_FILE" 2>/dev/null || true
     else
         cat >> "$TORRC" <<EOF
 
@@ -670,6 +675,7 @@ DNSPort 127.0.0.1:${TOR_DNS_PORT}
 EOF
         echo -e "${YELLOW}[i] torrc: TransPort=${TOR_TRANS_PORT}, DNSPort=${TOR_DNS_PORT}, ExitNodes=random${RESET}"
         echo "random" > "$COUNTRY_FILE"
+        chmod 600 "$COUNTRY_FILE" 2>/dev/null || true
     fi
 }
 
