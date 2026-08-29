@@ -455,7 +455,7 @@ cmd_check() {
     echo -e "  ${BOLD}── System ──────────────────────────────${RESET}"
     echo -e "  Script:    tor-route.sh v${VERSION}"
     if [[ -f /etc/os-release ]]; then
-        echo -e "  OS:        $(grep -oP '(?<=^PRETTY_NAME=").*(?=")' /etc/os-release 2>/dev/null || grep -oP '(?<=^PRETTY_NAME=).*' /etc/os-release 2>/dev/null | tr -d '"')"
+        echo -e "  OS:        $(awk -F'=' '/^PRETTY_NAME=/ {gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null)"
     fi
     echo -e "  Kernel:    $(uname -rs 2>/dev/null)"
 
