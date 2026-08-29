@@ -297,16 +297,36 @@ ensure_state_dir() {
         exit 1
     fi
     if [[ ! -d "$STATE_DIR" ]]; then
-        mkdir -p "$STATE_DIR" 2>/dev/null || {
+        # Use mkdir without -p for the final component to avoid following a
+        # symlink that could have been created between the first check and
+        # now; the parent (/run or /tmp) already exists.
+        mkdir "$STATE_DIR" 2>/dev/null || {
+            # mkdir failed — re-check if it appeared as symlink/file in the
+            # meantime before reporting a generic error.
+            if [[ -L "$STATE_DIR" ]]; then
+                echo -e "${RED}[✗] State directory is a symlink - refusing to follow for security (${STATE_DIR}).${RESET}" >&2
+                echo -e "    ${YELLOW}Remove the symlink manually and retry.${RESET}" >&2
+                exit 1
+            fi
+            if [[ -e "$STATE_DIR" ]]; then
+                echo -e "${RED}[✗] State path exists but is not a directory (${STATE_DIR}).${RESET}" >&2
+                exit 1
+            fi
             echo -e "${RED}[✗] Could not create state directory ${STATE_DIR}.${RESET}" >&2
             exit 1
         }
+    fi
+    if [[ -L "$STATE_DIR" ]]; then
+        echo -e "${RED}[✗] State directory became a symlink - aborting (${STATE_DIR}).${RESET}" >&2
+        exit 1
     fi
     if [[ ! -d "$STATE_DIR" ]]; then
         echo -e "${RED}[✗] State path exists but is not a directory (${STATE_DIR}).${RESET}" >&2
         exit 1
     fi
     chmod 700 "$STATE_DIR" 2>/dev/null || true
+    # Re-check after chmod in case of race between check and chmod; chmod
+    # follows symlinks, so this must be after the symlink guard.
     if [[ -L "$STATE_DIR" ]]; then
         echo -e "${RED}[✗] State directory became a symlink - aborting (${STATE_DIR}).${RESET}" >&2
         exit 1
