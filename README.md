@@ -20,13 +20,14 @@ Route all of your machine's TCP and DNS traffic through Tor with a single comman
 4.  [Usage](#usage)
     1.  [Examples](#examples)
 5.  [What each command does internally](#what-each-command-does-internally)
-    1.  [`start [CC]`](#start-cc)
-    2.  [`countries`](#countries)
-    3.  [`stop`](#stop)
-    4.  [`status`](#status)
-    5.  [`newnode [CC]`](#newnode-cc)
-    6.  [`check`](#check)
-    7.  [Out-of-order and repeated commands](#out-of-order-and-repeated-commands)
+    1.  [Shared notes](#shared-notes)
+    2.  [`start [CC]`](#start-cc)
+    3.  [`countries`](#countries)
+    4.  [`stop`](#stop)
+    5.  [`status`](#status)
+    6.  [`newnode [CC]`](#newnode-cc)
+    7.  [`check`](#check)
+    8.  [Out-of-order and repeated commands](#out-of-order-and-repeated-commands)
 6.  [Known limitations](#known-limitations)
      1.  [Existing connections](#existing-connections)
      2.  [Browser WebRTC](#browser-webrtc)
@@ -146,7 +147,7 @@ sudo tor-route newnode
 sudo tor-route newnode jp
 
 # List all supported country codes
-sudo tor-route countries
+tor-route countries
 
 # Run a system health check (safe to paste in bug reports)
 sudo tor-route check
@@ -159,7 +160,7 @@ sudo tor-route stop
 
 ## What each command does internally
 
-#### Shared notes
+### Shared notes
 
 > **Concurrency and crash safety.** `start`, `stop`, and `newnode` first try to take a non-blocking `flock` on `/run/tor-route/lock` (fallback `/tmp/tor-route/lock` when `/run` is absent). The helper refuses a pre-existing symlink at that path, creates the file `0600`, and holds file descriptor 9 for the whole run — the kernel releases it on exit, so stale locks cannot happen. A second concurrent invocation exits immediately with `[✗] Another tor-route command is already running.` Read-only commands (`status`, `check`, `countries`) never take the lock.
 
@@ -242,7 +243,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 
 ### Out-of-order and repeated commands
 
-| Situation | What the script does | Safe to retry? |
+| Situation | What the script does | Next step |
 |---|---|---|
 | `start` then `start` again after the first has **finished** (same terminal, still routed) | **Sequential guard:** refuses with `Tor routing is already active` — backups are not overwritten, exits `0` | Run `stop` first, or `newnode` to change exit |
 | `start` and `start` at the **same time** (two terminals, overlapping) | **Flock lock:** second is refused immediately by the `flock` on `/run/tor-route/lock` with `[✗] Another tor-route command is already running`, exits `1`; no state is changed | Wait for the first to finish and retry |

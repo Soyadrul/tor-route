@@ -10,7 +10,7 @@
 #    sudo tor-route stop          → Disable Tor routing (back to normal)
 #    sudo tor-route status        → Show routing state and exit node info
 #    sudo tor-route newnode [CC]  → Switch exit node, optionally pin country
-#    sudo tor-route countries     → List all supported country codes
+#    tor-route countries          → List all supported country codes
 #    sudo tor-route check         → Thorough dry-run system check (safe to paste in GitHub issues)
 # =============================================================================
 
