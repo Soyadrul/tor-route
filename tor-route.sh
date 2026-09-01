@@ -15,6 +15,7 @@
 # =============================================================================
 
 VERSION="1.3.3"
+COMMIT="STABLE" # 7-char git hash for bleeding edge (main), "STABLE" for releases; updated by CI/hook via: sed -i "s/^COMMIT=.*/COMMIT=\"$(git rev-parse --short HEAD)\"/"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
@@ -248,6 +249,13 @@ require_init() {
 }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+_banner_commit() {
+    if [[ "$COMMIT" == "STABLE" || -z "$COMMIT" ]]; then
+        echo "(STABLE)"
+    else
+        echo "(${COMMIT})"
+    fi
+}
 banner() {
     echo -e "\n${CYAN}${BOLD}╔══════════════════════════════════════════╗"
     echo -e "║        Tor Traffic Router  v${VERSION}        ║"
@@ -471,7 +479,7 @@ cmd_check() {
 
     # ── System ──────────────────────────────────────────────────────────────
     echo -e "  ${BOLD}── System ──────────────────────────────${RESET}"
-    echo -e "  Script:    tor-route.sh v${VERSION}"
+    echo -e "  Script:    tor-route.sh v${VERSION} $(_banner_commit)"
     if [[ -f /etc/os-release ]]; then
         echo -e "  OS:        $(awk -F'=' '/^PRETTY_NAME=/ {gsub(/"/, "", $2); print $2; exit}' /etc/os-release 2>/dev/null)"
     fi

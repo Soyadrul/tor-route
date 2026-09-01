@@ -98,8 +98,11 @@ If IPv6 is disabled in the kernel (e.g. the machine was booted with `ipv6.disabl
 Run the following command to download and install the latest **bleeding-edge** version of `tor-route` on any Linux distribution:
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/Soyadrul/tor-route/main/tor-route.sh -o /usr/local/bin/tor-route \
-  && sudo chmod +x /usr/local/bin/tor-route
+sudo tor-route stop 2>/dev/null || true
+sudo curl -fsSL https://raw.githubusercontent.com/Soyadrul/tor-route/main/tor-route.sh -o /usr/local/bin/tor-route
+COMMIT=$(curl -s https://api.github.com/repos/Soyadrul/tor-route/commits/main | grep -m1 '"sha"' | cut -d'"' -f4 | cut -c1-7)
+sudo sed -i "s/^COMMIT=.*/COMMIT=\"$COMMIT\"/" /usr/local/bin/tor-route
+sudo chmod +x /usr/local/bin/tor-route
 ```
 
 No other configuration is required before first use.
