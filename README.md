@@ -106,7 +106,7 @@ sudo chmod +x /usr/local/bin/tor-route
 ```
 
 This installation command does the following:
-- `sudo tor-route stop` — restore normal networking before overwriting the script, so no state migration runs mid-session
+- `sudo tor-route stop` — restore normal networking and clear any active session's state before overwriting the script
 - `sudo curl -fsSL …` — fetch the latest `main`
 - `COMMIT=…` + `sudo sed …` — embed the 7-char commit hash so `tor-route check` shows `vX.Y.Z (abc1234)` on bleeding edge and `vX.Y.Z (STABLE)` on releases
 - `sudo chmod +x …` — make the script executable
