@@ -1583,7 +1583,13 @@ cmd_newnode() {
             fi
         else
             echo -e "\n${RED}[✗] Aborted - reverting to the previous exit node configuration...${RESET}"
-            configure_torrc "$prev_country"
+            # The state file stores the literal "random" for an unpinned session,
+            # but configure_torrc expects an EMPTY argument for random - passing
+            # "random" through would pin Tor to a nonexistent country under
+            # StrictNodes and kill all traffic.
+            local revert_to=""
+            [[ "$prev_country" != "random" ]] && revert_to="$prev_country"
+            configure_torrc "$revert_to"
             if ! service_tor_reload; then
                 echo -e "    ${YELLOW}The Tor reload failed - run ${BOLD}sudo ${0##*/} newnode${RESET}${YELLOW} again to apply the reverted config.${RESET}"
             fi

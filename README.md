@@ -286,7 +286,7 @@ Tor provides anonymity through routing, not encryption of the final hop. Traffic
 
 ### Exit node country pinning
 
-When a country code is specified, Tor uses `StrictNodes 1`, which means it will **only** use exits in that country and will not fall back to others if none are available — with no usable exit, bootstrap reaches 100% but traffic never flows. When that happens, `start`/`newnode` detect it through their verification probes and offer a choice: switch to a random exit node or abort (see [start](#start-cc) / [newnode](#newnode-cc)). Non-interactive sessions default to abort; afterwards you can run `newnode` without a country code to switch back to random, or try a different country.
+When a country code is specified, Tor uses `StrictNodes 1`, which means it will **only** use exits in that country and will not fall back to others if none are available — with no usable exit, Tor cannot build a complete circuit: bootstrap stalls (typically below 100%) and traffic never flows. When that happens, `start`/`newnode` detect it through their verification probes and offer a choice: switch to a random exit node or abort (see [start](#start-cc) / [newnode](#newnode-cc)). Non-interactive sessions default to abort; afterwards you can run `newnode` without a country code to switch back to random, or try a different country.
 
 ### Exit node blocking
 
