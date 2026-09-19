@@ -1119,6 +1119,63 @@ show_ip() {
         || echo -e "    IPv6: ${GREEN}Blocked ✓${RESET}"
 }
 
+# ── Verification probes & country-pin fallback ────────────────────────────────
+# Probe whether traffic actually flows through Tor (via the iptables redirect).
+# Prints progress dots; returns 0 as soon as a request succeeds.
+probe_traffic() {
+    local i
+    for i in {1..45}; do
+        sleep 1; echo -n "."
+        if curl -sf --max-time 2 -4 https://api.ipify.org >/dev/null 2>&1 ||
+           curl -sf --max-time 2 -4 https://check.torproject.org >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Wait up to 30 s for the public IP to change (new circuit). Prints dots.
+# Returns 0 on change, 1 if it did not change within the window.
+wait_for_new_ip() {
+    local old_ip="$1" i new_ip
+    echo -e "\n  Waiting for a new circuit (new IP)..."
+    for i in {1..30}; do
+        sleep 1; echo -n "."
+        new_ip=$(curl -sf --max-time 2 -4 https://api.ipify.org 2>/dev/null)
+        if [[ -n "$new_ip" && "$new_ip" != "$old_ip" ]]; then
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
+
+# Ask what to do when a requested country pin appears unusable (the traffic
+# probe failed while ExitNodes={cc} was active). Returns 0 for "use a random
+# exit node", 1 for "abort". Non-interactive sessions, EOF and timeouts all
+# default to abort: the safe choice is not to apply the pin.
+prompt_country_fallback() {
+    local cc="$1" input=""
+    echo -e "\n${YELLOW}${BOLD}[!] Traffic is not flowing with the exit node pinned to ${cc^^}.${RESET}"
+    echo -e "    ${YELLOW}There is likely no usable exit node in that country right now.${RESET}"
+    # No usable terminal (cron, CI) → cannot ask; abort.
+    if [[ ! -r /dev/tty && ! -t 0 ]]; then
+        return 1
+    fi
+    echo -e "    ${BOLD}r${RESET} - use a random exit node"
+    echo -e "    ${BOLD}a${RESET} - abort (do not apply the country pin)"
+    printf '  Choice [a/r] (default: a): '
+    if [[ -r /dev/tty ]]; then
+        IFS= read -r -t 120 input < /dev/tty || input=""
+    else
+        IFS= read -r -t 120 input || input=""
+    fi
+    case "${input,,}" in
+        r|random) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # =============================================================================
 #  COMMANDS
 # =============================================================================
@@ -1221,16 +1278,40 @@ cmd_start() {
     # is still bootstrapping after the timeout, warn instead of claiming ✓.
     echo -n "    Waiting for traffic to route through Tor"
     local routed=0
-    for i in {1..45}; do
-        sleep 1; echo -n "."
-        if curl -sf --max-time 2 -4 https://api.ipify.org >/dev/null 2>&1 ||
-           curl -sf --max-time 2 -4 https://check.torproject.org >/dev/null 2>&1; then
-            routed=1
-            break
-        fi
-    done
-    trap - INT TERM
+    probe_traffic && routed=1
     echo ""
+
+    # A failed probe with a country pin active most likely means no exit node
+    # in that country is available (StrictNodes makes Tor wait forever). Let
+    # the user fall back to a random exit or abort. The unwind trap stays
+    # armed across this whole block, so an interrupt here still restores
+    # firewall, DNS and Tor exactly like a Ctrl+C during bootstrap would.
+    if [[ $routed -eq 0 && -n "$country" ]]; then
+        if prompt_country_fallback "$country"; then
+            configure_torrc ""
+            if service_tor_reload; then
+                echo -n "    Waiting for traffic to route through Tor (random exit)"
+                probe_traffic && routed=1
+                echo ""
+            else
+                # torrc now says random, but Tor is still running the pinned
+                # config until a reload succeeds - warn instead of re-probing.
+                echo -e "\n${YELLOW}[!] The Tor reload failed - traffic will use a random exit node once it succeeds.${RESET}"
+            fi
+        else
+            echo -e "\n${RED}[✗] Aborted - restoring normal internet...${RESET}"
+            restore_iptables
+            if is_routing_active; then
+                print_manual_rule_recovery
+                exit 1
+            fi
+            fix_dns_stop
+            restore_tor_service
+            exit 1
+        fi
+    fi
+
+    trap - INT TERM
 
     if [[ $routed -eq 1 ]]; then
         echo -e "\n${GREEN}${BOLD}[✓] All traffic is now routed through Tor!${RESET}"
@@ -1425,7 +1506,12 @@ cmd_newnode() {
         echo -e "${RED}[✗] Tor routing is not active. Run: sudo ${0##*/} start${RESET}"; exit 1
     fi
 
-    # Parse optional country code argument
+    # Parse optional country code argument. The previously pinned country is
+    # captured before configure_torrc overwrites COUNTRY_FILE, so an aborted
+    # pin can be reverted to exactly what was active before this command.
+    local prev_country
+    prev_country=$(cat "$COUNTRY_FILE" 2>/dev/null || echo "random")
+
     local country=""
     if [[ -n "${2:-}" ]]; then
         case "${2,,}" in
@@ -1443,10 +1529,8 @@ cmd_newnode() {
         echo -e "${CYAN}[→] Switching to a new exit node in: ${BOLD}${country^^}${RESET}\n"
     else
         # If no country given, check if one was previously pinned and clear it
-        local prev
-        prev=$(cat "$COUNTRY_FILE" 2>/dev/null || echo "random")
-        if [[ "$prev" != "random" ]]; then
-            echo -e "${CYAN}[→] Switching to a new random exit node (clearing previous pin: ${prev^^})...${RESET}\n"
+        if [[ "$prev_country" != "random" ]]; then
+            echo -e "${CYAN}[→] Switching to a new random exit node (clearing previous pin: ${prev_country^^})...${RESET}\n"
         else
             echo -e "${CYAN}[→] Requesting a new random Tor circuit (new exit node = new IP)...${RESET}\n"
         fi
@@ -1478,21 +1562,35 @@ cmd_newnode() {
     trap 'echo ""; echo -e "${RED}[✗] Interrupted - new circuit request aborted.${RESET}"; exit 1' INT TERM
 
     if [[ -n "$old_ip" ]]; then
-        echo -e "\n  Waiting for a new circuit (new IP)..."
-        for i in {1..30}; do
-            sleep 1; echo -n "."
-            local new_ip
-            new_ip=$(curl -sf --max-time 2 -4 https://api.ipify.org 2>/dev/null)
-            if [[ -n "$new_ip" && "$new_ip" != "$old_ip" ]]; then
-                changed=1
-                break
-            fi
-        done
-        echo ""
+        wait_for_new_ip "$old_ip" && changed=1
     else
         # Could not read the IP before switching - cannot verify a change.
         echo -e "\n  Waiting for a new circuit..."; sleep 15
     fi
+
+    # A failed IP-change check with a fresh pin most likely means no exit node
+    # in that country is available (StrictNodes makes Tor wait forever). Let
+    # the user fall back to a random exit or revert to the previous config.
+    if [[ $changed -eq 0 && -n "$old_ip" && -n "$country" ]]; then
+        if prompt_country_fallback "$country"; then
+            configure_torrc ""
+            if service_tor_reload; then
+                wait_for_new_ip "$old_ip" && changed=1
+            else
+                # torrc now says random, but Tor is still running the pinned
+                # config until a reload succeeds - warn instead of re-waiting.
+                echo -e "\n${YELLOW}[!] The Tor reload failed - traffic will use a random exit node once it succeeds.${RESET}"
+            fi
+        else
+            echo -e "\n${RED}[✗] Aborted - reverting to the previous exit node configuration...${RESET}"
+            configure_torrc "$prev_country"
+            if ! service_tor_reload; then
+                echo -e "    ${YELLOW}The Tor reload failed - run ${BOLD}sudo ${0##*/} newnode${RESET}${YELLOW} again to apply the reverted config.${RESET}"
+            fi
+            exit 1
+        fi
+    fi
+
     trap - INT TERM
 
     echo -e "\n  ${YELLOW}New:${RESET}"; show_ip
