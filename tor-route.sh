@@ -923,6 +923,52 @@ save_iptables() {
     echo -e "${YELLOW}[i] Firewall rules backed up.${RESET}"
 }
 
+# Delete conntrack entries whose REPLY source port is one of Tor's local
+# ports. conntrack has no reply-direction port filter for -D (only IP-only
+# --reply-src/--reply-dst), so list the table and delete matching entries
+# individually by their original tuple. REDIRECT rewrites make Tor's local
+# port the reply SOURCE port, while the original destination port stays what
+# the application dialed (443, 53, ...) - plain --dport would therefore match
+# almost nothing. Still scoped to the TOR_* ports only: a broad `conntrack -F`
+# would also tear down every established connection that was never routed
+# through Tor (e.g. an SSH session calling `stop` itself). UNREPLIED entries
+# have no reply tuple and are left alone - they expire on their own and do
+# not black-hole existing flows.
+cleanup_conntrack_tor_ports() {
+    command -v conntrack &>/dev/null || {
+        echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
+        return 0
+    }
+    local _ct_re='^([a-z]+)[[:space:]]+.*[[:space:]](src=[^ ]+) (dst=[^ ]+) (sport=[0-9]+) (dport=[0-9]+) \[(.*)\]$'
+    local _ct_line _ct_proto _rsport _ct_src _ct_dst _ct_sport _ct_dport _ct_deleted=0
+    while IFS= read -r _ct_line; do
+        [[ "$_ct_line" =~ $_ct_re ]] || continue
+        _ct_proto="${BASH_REMATCH[1]}"
+        # Capture the original tuple NOW: every later `=~` match overwrites
+        # BASH_REMATCH, so reading groups 2-5 after the reply-sport match
+        # below would delete with an empty (and therefore wrong) tuple.
+        _ct_src="${BASH_REMATCH[2]#*=}"
+        _ct_dst="${BASH_REMATCH[3]#*=}"
+        _ct_sport="${BASH_REMATCH[4]#*=}"
+        _ct_dport="${BASH_REMATCH[5]#*=}"
+        _rsport=""
+        [[ "${BASH_REMATCH[6]}" =~ sport=([0-9]+) ]] && _rsport="${BASH_REMATCH[1]}"
+        if { [[ "$_ct_proto" == "tcp" && "$_rsport" == "$TOR_TRANS_PORT" ]] || \
+             [[ "$_ct_proto" == "udp" && "$_rsport" == "$TOR_DNS_PORT" ]]; }; then
+            conntrack -D -p "$_ct_proto" \
+                --src "$_ct_src" \
+                --dst "$_ct_dst" \
+                --sport "$_ct_sport" \
+                --dport "$_ct_dport" 2>/dev/null && _ct_deleted=$(( _ct_deleted + 1 ))
+        fi
+    done < <(conntrack -L 2>/dev/null)
+    if [[ $_ct_deleted -gt 0 ]]; then
+        echo -e "    Removed ${_ct_deleted} stale entr$([[ $_ct_deleted -eq 1 ]] && echo y || echo ies)."
+    else
+        echo -e "    (none found)"
+    fi
+}
+
 restore_iptables() {
     # If `start` never saved a firewall (backups absent), there is nothing to
     # restore - flushing everything here would wipe the user's existing rules.
@@ -973,22 +1019,10 @@ restore_iptables() {
     fi
 
     # Delete conntrack entries that still point at Tor's ports (NAT state
-    # carries the rewrite independently of the current ruleset). Match the
-    # REPLY tuple: REDIRECT rewrites connections so Tor's local port becomes
-    # the reply SOURCE port, while the original destination port stays
-    # whatever the application dialed (443, 53, ...) - plain --dport would
-    # therefore match almost nothing and stale entries would survive until
-    # they expire. Still scoped to the TOR_* ports only: a broad
-    # `conntrack -F` would also tear down every established connection that
-    # was never routed through Tor (e.g. an SSH session calling `stop`
-    # itself).
+    # carries the rewrite independently of the current ruleset). See
+    # cleanup_conntrack_tor_ports for why this matches on the reply tuple.
     echo -e "${YELLOW}[i] Removing conntrack entries for Tor ports...${RESET}"
-    if command -v conntrack &>/dev/null; then
-        conntrack -D -p tcp --reply-port-src "$TOR_TRANS_PORT" 2>/dev/null
-        conntrack -D -p udp --reply-port-src "$TOR_DNS_PORT" 2>/dev/null
-    else
-        echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
-    fi
+    cleanup_conntrack_tor_ports
 
     return $restored
 }
