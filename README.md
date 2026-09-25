@@ -65,7 +65,7 @@ With tor-route:
 | Traffic type | Treatment |
 |---|---|
 | TCP (HTTP, HTTPS, SSH, …) | Redirected through Tor (`-m state --state NEW` only; already-established connections keep their original path) |
-| DNS queries | Redirected to Tor's internal DNS resolver (`udp/tcp --dport 53 → 127.0.0.1:5353`, except Tor's own traffic) |
+| DNS queries | Redirected to Tor's internal DNS resolver (`udp/tcp --dport 53 → 127.0.0.1:9053`, except Tor's own traffic) |
 | UDP (WebRTC, QUIC, STUN) | Blocked by default (`OUTPUT -p udp -j DROP` after allowing Tor's own UDP, `127.0.0.1:53`, and LAN/private ranges — see below; cannot be anonymised by Tor) |
 | IPv6 | Blocked entirely (`ip6tables -P INPUT/OUTPUT/FORWARD DROP`; Tor does not support IPv6 transparent proxying) |
 | LAN / private ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) | Passed through directly (local network still works; applies to both TCP `RETURN` and UDP `ACCEPT`) |
@@ -331,7 +331,7 @@ Run `status` and check every line:
 - `UDP / WebRTC: Blocked ✓` — non-DNS UDP is dropped
 - `IPv6: Blocked ✓` — no IPv6 leak
 - `DNS (resolved): All units masked ✓` (systemd) or `DNS: /etc/resolv.conf → Tor ✓` (other inits) — resolver cannot bypass Tor
-- `DNSPort 5353: Listening ✓` — Tor's DNS is actually running
+- `DNSPort 9053: Listening ✓` — Tor's DNS is actually running
 
 If all lines show ✓ but the IP check website still shows your real IP, either the site is using WebRTC JavaScript (disable WebRTC in your browser as described above), or the connection was opened before `start` — close and reopen the app or browser tab.
 

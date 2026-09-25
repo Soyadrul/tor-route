@@ -21,7 +21,12 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 TOR_TRANS_PORT=9040
-TOR_DNS_PORT=5353
+# DNSPort deliberately avoids 5353 (the standard mDNS/Avahi port): the two
+# sockets can coexist (both set SO_REUSEADDR), but then loopback queries to
+# 127.0.0.1:5353 are answered by Tor instead of avahi, and a non-SO_REUSEADDR
+# holder blocks Tor's startup entirely (BUGS.md #5). 9053 is unprivileged and
+# not a common service port.
+TOR_DNS_PORT=9053
 TOR_USERS=(tor debian-tor toranon _tor)
 TOR_USER=""
 TOR_UID=""
