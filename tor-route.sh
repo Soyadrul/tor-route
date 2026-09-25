@@ -663,6 +663,20 @@ cleanup_torrc() {
     echo -e "${YELLOW}[i] torrc restored.${RESET}"
 }
 
+# Restore the torrc block and COUNTRY_FILE to the configuration that was
+# active before `newnode` called configure_torrc. $1 is the previous
+# COUNTRY_FILE value, including the literal "random" sentinel; configure_torrc
+# expects an EMPTY argument for random, so map it here - passing "random"
+# through would pin Tor to a nonexistent country under StrictNodes and kill
+# all traffic. Unlike cleanup_torrc this keeps the block instead of deleting
+# it, so torrc, the state file and the still-live Tor process (which never
+# applied the new config) all agree (BUGS.md #3).
+revert_torrc_to_previous() {
+    local previous="${1:-random}" revert_to=""
+    [[ "$previous" != "random" ]] && revert_to="$previous"
+    configure_torrc "$revert_to"
+}
+
 # Put the Tor service back the way `start` found it. If Tor was already
 # running before (recorded in TOR_STATE_FILE), clean torrc first and restart
 # the service so it comes back on the user's own configuration; if it was
@@ -1573,12 +1587,12 @@ cmd_newnode() {
     # From the torrc write until the reload completes, an interrupt must
     # revert the edit (same contract as the reload-failure path below).
     # Before this point nothing has been modified yet, so no trap is needed.
-    trap 'cleanup_torrc; echo ""; echo -e "${RED}[✗] Interrupted - torrc changes reverted, reload not sent.${RESET}"; exit 1' INT TERM
+    trap 'revert_torrc_to_previous "$prev_country"; echo ""; echo -e "${RED}[✗] Interrupted - torrc reverted to the previous configuration, reload not sent.${RESET}"; exit 1' INT TERM
     configure_torrc "$country"
 
     if ! service_tor_reload; then
-        cleanup_torrc
-        echo -e "${RED}[✗] Tor reload failed - torrc changes reverted.${RESET}"
+        revert_torrc_to_previous "$prev_country"
+        echo -e "${RED}[✗] Tor reload failed - torrc reverted to the previous configuration.${RESET}"
         exit 1
     fi
 
@@ -1608,13 +1622,7 @@ cmd_newnode() {
             fi
         else
             echo -e "\n${RED}[✗] Aborted - reverting to the previous exit node configuration...${RESET}"
-            # The state file stores the literal "random" for an unpinned session,
-            # but configure_torrc expects an EMPTY argument for random - passing
-            # "random" through would pin Tor to a nonexistent country under
-            # StrictNodes and kill all traffic.
-            local revert_to=""
-            [[ "$prev_country" != "random" ]] && revert_to="$prev_country"
-            configure_torrc "$revert_to"
+            revert_torrc_to_previous "$prev_country"
             if ! service_tor_reload; then
                 echo -e "    ${YELLOW}The Tor reload failed - run ${BOLD}sudo ${0##*/} newnode${RESET}${YELLOW} again to apply the reverted config.${RESET}"
             fi
