@@ -924,6 +924,20 @@ ipv6_available() {
     ip6tables -L -n &>/dev/null
 }
 
+# Classify the IPv6 OUTPUT chain policy for display: "blocked" (policy DROP),
+# "allowed" (any other policy) or "unavailable" (no usable IPv6 stack, so
+# nothing can leak). `status` uses this so it does not cry "leak possible" on
+# kernels booted with ipv6.disable=1 (BUGS.md #6).
+ipv6_policy_state() {
+    if ! ipv6_available; then
+        echo "unavailable"
+    elif ip6tables -L OUTPUT -n 2>/dev/null | head -n1 | grep -q "policy DROP"; then
+        echo "blocked"
+    else
+        echo "allowed"
+    fi
+}
+
 save_iptables() {
     ensure_state_dir
     # A failed save aborts start. A partial backup must not survive: if only
@@ -1487,11 +1501,14 @@ cmd_status() {
             echo -e "  UDP / WebRTC:      ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
         fi
 
-        if ip6tables -L OUTPUT 2>/dev/null | head -n1 | grep -q "policy DROP"; then
-            echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}"
-        else
-            echo -e "  IPv6:              ${RED}${BOLD}NOT blocked - leak possible!${RESET}"
-        fi
+        case "$(ipv6_policy_state)" in
+            blocked)
+                echo -e "  IPv6:              ${GREEN}${BOLD}Blocked ✓${RESET}" ;;
+            unavailable)
+                echo -e "  IPv6:              ${YELLOW}Not available (no IPv6 stack)${RESET}" ;;
+            *)
+                echo -e "  IPv6:              ${RED}${BOLD}NOT blocked - leak possible!${RESET}" ;;
+        esac
 
         # The DNS masking state only means something while routing is
         # active: `start` masks the resolver (systemd) or repoints

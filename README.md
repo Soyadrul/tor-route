@@ -219,7 +219,7 @@ Displays a live summary:
 2. Whether the Tor service is running
 3. Whether TCP traffic is being routed through Tor
 4. Whether UDP / WebRTC is blocked (checked only while routing is active, and matched against the script's own rules)
-5. Whether IPv6 is blocked (chain policy, checked only while routing is active)
+5. Whether IPv6 is blocked (chain policy, checked only while routing is active) — reported as `Not available` on kernels with no IPv6 stack instead of a false leak warning
 6. Whether the DNS resolver is masked (systemd) or redirected via `/etc/resolv.conf` (other inits) — only shown while routing is active; if routing is off, `status` just shows the resolver's normal state
 7. The **configured exit node country** (pinned code or `Random`)
 8. Whether Tor is listening on the correct ports
