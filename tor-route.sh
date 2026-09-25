@@ -1129,9 +1129,19 @@ show_ip() {
     fi
     local ip6
     ip6=$(curl -s --max-time 5 -6 https://api6.ipify.org 2>/dev/null)
-    [[ -n "$ip6" ]] \
-        && echo -e "    IPv6: ${RED}${BOLD}${ip6}  ← LEAK!${RESET}" \
-        || echo -e "    IPv6: ${GREEN}Blocked ✓${RESET}"
+    # A reachable IPv6 address is only a leak while the IPv6 DROP policy is
+    # supposed to be active. With routing off it is just the host's own
+    # address (BUGS.md #2), so report it without the alarm; report "Blocked"
+    # only when routing is on and IPv6 really is unreachable.
+    if is_routing_active; then
+        [[ -n "$ip6" ]] \
+            && echo -e "    IPv6: ${RED}${BOLD}${ip6}  ← LEAK!${RESET}" \
+            || echo -e "    IPv6: ${GREEN}Blocked ✓${RESET}"
+    else
+        [[ -n "$ip6" ]] \
+            && echo -e "    IPv6: ${BOLD}${ip6}${RESET}" \
+            || echo -e "    IPv6: ${YELLOW}not configured / unreachable${RESET}"
+    fi
 }
 
 # ── Verification probes & country-pin fallback ────────────────────────────────

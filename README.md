@@ -223,7 +223,7 @@ Displays a live summary:
 6. Whether the DNS resolver is masked (systemd) or redirected via `/etc/resolv.conf` (other inits) — only shown while routing is active; if routing is off, `status` just shows the resolver's normal state
 7. The **configured exit node country** (pinned code or `Random`)
 8. Whether Tor is listening on the correct ports
-9. Your current public IPv4, country, ISP, and IPv6 leak status
+9. Your current public IPv4, country, ISP, and IPv6 reachability — an IPv6 address is flagged as a leak only while routing is active; with routing off it is simply your own address
 
 ### `newnode [CC]`
 
