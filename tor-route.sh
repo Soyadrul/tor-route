@@ -606,7 +606,28 @@ cmd_countries() {
 # Remove only the tor-route-managed block from torrc (the marked section
 # appended by configure_torrc). Any TransPort/DNSPort/ExitNodes lines that
 # existed BEFORE tor-route (outside the markers) are left untouched.
+#
+# Never let the sed range extend to EOF: if the start marker exists without
+# the end marker (partial write, crash, power loss), an unbounded range would
+# delete everything below the marker, including user-owned lines (BUGS.md
+# #4). In that case back the file up and abort instead.
 strip_torrc_block() {
+    [[ -f "$TORRC" ]] || return 0
+    local starts ends
+    starts=$(grep -c '^# --- tor-route.sh start ---$' "$TORRC" 2>/dev/null)
+    ends=$(grep -c '^# --- tor-route.sh end ---$' "$TORRC" 2>/dev/null)
+    starts=${starts:-0}
+    ends=${ends:-0}
+    if [[ "$starts" -eq 0 && "$ends" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$starts" -ne "$ends" ]]; then
+        local backup="${TORRC}.tor-route-unterminated.$(date +%s)"
+        cp "$TORRC" "$backup" 2>/dev/null || true
+        echo -e "${RED}[✗] torrc has ${starts} start marker(s) but ${ends} end marker(s) - refusing to edit it.${RESET}" >&2
+        echo -e "    ${YELLOW}Backup written to ${backup}; fix or remove the block, then retry.${RESET}" >&2
+        exit 1
+    fi
     sed -i '/^# --- tor-route.sh start ---$/,/^# --- tor-route.sh end ---$/d' "$TORRC" 2>/dev/null
 }
 

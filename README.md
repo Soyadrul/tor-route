@@ -209,7 +209,7 @@ Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — se
 3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks the DNS resolver units it masked itself — systemd only; units that were already masked before `start` stay masked — and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live `stub-resolv.conf` **only when `systemd-resolved` was running before `start`** and the stub file exists, then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`). If the DNS was never modified, it is left untouched.
 4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 5. Restores the Tor service to how it was found: stopped if Tor wasn't running before `start`, restarted with the original configuration (after the torrc block is removed) if it was.
-6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
+6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. If the markers are unbalanced (e.g. a partial write left a start marker without its end marker), torrc is backed up and the command aborts instead of risking lines below the marker. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
 
