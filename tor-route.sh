@@ -924,46 +924,27 @@ save_iptables() {
 }
 
 # Delete conntrack entries whose REPLY source port is one of Tor's local
-# ports. conntrack has no reply-direction port filter for -D (only IP-only
-# --reply-src/--reply-dst), so list the table and delete matching entries
-# individually by their original tuple. REDIRECT rewrites make Tor's local
-# port the reply SOURCE port, while the original destination port stays what
-# the application dialed (443, 53, ...) - plain --dport would therefore match
-# almost nothing. Still scoped to the TOR_* ports only: a broad `conntrack -F`
-# would also tear down every established connection that was never routed
-# through Tor (e.g. an SSH session calling `stop` itself). UNREPLIED entries
-# have no reply tuple and are left alone - they expire on their own and do
-# not black-hole existing flows.
+# ports. REDIRECT rewrites make Tor's local port the reply SOURCE port, while
+# the original destination port stays whatever the application dialed (443,
+# 53, ...) - conntrack's native --reply-port-src filter matches exactly those
+# entries (verified against conntrack v1.4.9). Still scoped to the TOR_*
+# ports only: a broad `conntrack -F` would also tear down every established
+# connection that was never routed through Tor (e.g. an SSH session calling
+# `stop` itself). Kept as a named function so
+# tests/conntrack-cleanup-test.sh can exercise it in a throwaway netns.
 cleanup_conntrack_tor_ports() {
     command -v conntrack &>/dev/null || {
         echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
         return 0
     }
-    local _ct_re='^([a-z]+)[[:space:]]+.*[[:space:]](src=[^ ]+) (dst=[^ ]+) (sport=[0-9]+) (dport=[0-9]+) \[(.*)\]$'
-    local _ct_line _ct_proto _rsport _ct_src _ct_dst _ct_sport _ct_dport _ct_deleted=0
-    while IFS= read -r _ct_line; do
-        [[ "$_ct_line" =~ $_ct_re ]] || continue
-        _ct_proto="${BASH_REMATCH[1]}"
-        # Capture the original tuple NOW: every later `=~` match overwrites
-        # BASH_REMATCH, so reading groups 2-5 after the reply-sport match
-        # below would delete with an empty (and therefore wrong) tuple.
-        _ct_src="${BASH_REMATCH[2]#*=}"
-        _ct_dst="${BASH_REMATCH[3]#*=}"
-        _ct_sport="${BASH_REMATCH[4]#*=}"
-        _ct_dport="${BASH_REMATCH[5]#*=}"
-        _rsport=""
-        [[ "${BASH_REMATCH[6]}" =~ sport=([0-9]+) ]] && _rsport="${BASH_REMATCH[1]}"
-        if { [[ "$_ct_proto" == "tcp" && "$_rsport" == "$TOR_TRANS_PORT" ]] || \
-             [[ "$_ct_proto" == "udp" && "$_rsport" == "$TOR_DNS_PORT" ]]; }; then
-            conntrack -D -p "$_ct_proto" \
-                --src "$_ct_src" \
-                --dst "$_ct_dst" \
-                --sport "$_ct_sport" \
-                --dport "$_ct_dport" 2>/dev/null && _ct_deleted=$(( _ct_deleted + 1 ))
-        fi
-    done < <(conntrack -L 2>/dev/null)
-    if [[ $_ct_deleted -gt 0 ]]; then
-        echo -e "    Removed ${_ct_deleted} stale entr$([[ $_ct_deleted -eq 1 ]] && echo y || echo ies)."
+    local found=0
+    # conntrack -D exits 0 only when it deleted at least one entry; a
+    # nonzero status here just means nothing matched (or a netlink error,
+    # which stop's root context avoids).
+    conntrack -D -p tcp --reply-port-src "$TOR_TRANS_PORT" 2>/dev/null && found=1
+    conntrack -D -p udp --reply-port-src "$TOR_DNS_PORT" 2>/dev/null && found=1
+    if [[ $found -eq 1 ]]; then
+        echo -e "    Removed stale conntrack entries pointing at Tor's ports."
     else
         echo -e "    (none found)"
     fi
