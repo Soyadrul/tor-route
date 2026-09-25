@@ -757,6 +757,32 @@ interrupt_unwind() {
     exit 1
 }
 
+# Write $2 as the full content of $1 via a .tmp sibling + mv, then verify the
+# result. Returns non-zero when $1 cannot be replaced - notably a bind-mounted
+# file, where rename(2) fails with EBUSY and the original mv silently gave up.
+# Callers must warn instead of claiming success (BUGS.md #7).
+replace_file_verified() {
+    local target="$1" content="$2"
+    if ! printf '%s\n' "$content" > "${target}.tmp" 2>/dev/null; then
+        rm -f "${target}.tmp"
+        return 1
+    fi
+    if ! mv -f "${target}.tmp" "$target" 2>/dev/null; then
+        rm -f "${target}.tmp"
+        return 1
+    fi
+    [[ "$(cat "$target" 2>/dev/null)" == "$content" ]]
+}
+
+# Point symlink $1 at $2 and verify the result. Returns non-zero when the
+# symlink cannot be created (e.g. $1 is a bind-mounted file and unlink(2)
+# fails), so callers do not print ✓ for a restore that did not happen.
+link_file_verified() {
+    local link="$1" target="$2"
+    ln -sf "$target" "$link" 2>/dev/null || return 1
+    [[ "$(readlink "$link" 2>/dev/null)" == "$target" ]]
+}
+
 # ── DNS resolver handling ─────────────────────────────────────────────────────
 fix_dns_start() {
     ensure_state_dir
@@ -821,12 +847,15 @@ fix_dns_start() {
         done
     fi
 
-    # Write a plain resolv.conf pointing to 127.0.0.1. Use a tmp file and
-    # rename so a crash between rm and echo cannot leave the system with no
-    # resolv.conf at all. iptables will intercept port 53 queries there and
+    # Write a plain resolv.conf pointing to 127.0.0.1. The helper uses a tmp
+    # file and rename so a crash between rm and echo cannot leave the system
+    # with no resolv.conf at all, and verifies the result before we claim
+    # success (BUGS.md #7). iptables will intercept port 53 queries there and
     # forward them to Tor's DNS listener on port ${TOR_DNS_PORT}.
-    echo "nameserver 127.0.0.1" > /etc/resolv.conf.tmp
-    mv -f /etc/resolv.conf.tmp /etc/resolv.conf
+    if ! replace_file_verified /etc/resolv.conf "nameserver 127.0.0.1"; then
+        echo -e "${RED}[✗] Could not replace /etc/resolv.conf - it was NOT repointed at Tor's DNS listener (bind mount?).${RESET}" >&2
+        return 1
+    fi
     echo -e "${GREEN}[✓] /etc/resolv.conf → 127.0.0.1 (iptables will forward to Tor:${TOR_DNS_PORT}).${RESET}"
 }
 
@@ -868,18 +897,31 @@ fix_dns_stop() {
     # was actually running before `start` - otherwise the stub file can
     # exist while the service is deliberately stopped, and symlinking to it
     # would leave DNS broken. This mirrors the resolver_start logic below.
-    local _was_running_for_link
+    local _was_running_for_link _resolv_restored=0
     _was_running_for_link=$(cat "$RESOLVED_STATE_FILE" 2>/dev/null || echo "yes")
     if [[ "$_was_running_for_link" == "yes" && -f /run/systemd/resolve/stub-resolv.conf ]]; then
-        ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
-        echo -e "${YELLOW}[i] resolv.conf → symlink to stub-resolv.conf.${RESET}"
-    elif [[ -f "$RESOLV_BACKUP" ]]; then
-        cp "$RESOLV_BACKUP" /etc/resolv.conf
-        echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
-    else
-        echo "nameserver 1.1.1.1" > /etc/resolv.conf.tmp
-        mv -f /etc/resolv.conf.tmp /etc/resolv.conf
-        echo -e "${YELLOW}[i] No resolv.conf backup found - wrote generic fallback.${RESET}"
+        if link_file_verified /etc/resolv.conf /run/systemd/resolve/stub-resolv.conf; then
+            echo -e "${YELLOW}[i] resolv.conf → symlink to stub-resolv.conf.${RESET}"
+            _resolv_restored=1
+        else
+            echo -e "${YELLOW}[!] Could not symlink stub-resolv.conf - falling back to the backup.${RESET}"
+        fi
+    fi
+    if [[ $_resolv_restored -eq 0 && -f "$RESOLV_BACKUP" ]]; then
+        if cp "$RESOLV_BACKUP" /etc/resolv.conf 2>/dev/null && \
+           [[ "$(cat "$RESOLV_BACKUP" 2>/dev/null)" == "$(cat /etc/resolv.conf 2>/dev/null)" ]]; then
+            echo -e "${YELLOW}[i] resolv.conf restored from backup.${RESET}"
+            _resolv_restored=1
+        else
+            echo -e "${YELLOW}[!] Could not restore /etc/resolv.conf from the backup.${RESET}"
+        fi
+    fi
+    if [[ $_resolv_restored -eq 0 ]]; then
+        if replace_file_verified /etc/resolv.conf "nameserver 1.1.1.1"; then
+            echo -e "${YELLOW}[i] Wrote generic resolv.conf fallback (nameserver 1.1.1.1).${RESET}"
+        else
+            echo -e "${RED}[✗] Could not write /etc/resolv.conf at all - leaving it as is.${RESET}" >&2
+        fi
     fi
     rm -f "$RESOLV_BACKUP"
 
@@ -1349,8 +1391,19 @@ cmd_start() {
 
     # Swap resolv.conf only once the redirect rules exist, so the system's
     # DNS keeps working until then instead of pointing at a dead
-    # 127.0.0.1:53 for the whole bootstrap.
-    fix_dns_start
+    # 127.0.0.1:53 for the whole bootstrap. fix_dns_start verifies the swap;
+    # on failure unwind exactly like any other start error (BUGS.md #7).
+    if ! fix_dns_start; then
+        echo -e "\n${RED}[✗] DNS setup failed - restoring normal internet...${RESET}"
+        restore_iptables
+        if is_routing_active; then
+            print_manual_rule_recovery
+            exit 1
+        fi
+        fix_dns_stop
+        restore_tor_service
+        exit 1
+    fi
 
     # The probe below goes through the iptables redirect, so it only succeeds
     # once Tor has built a usable circuit. Announce success only then; if Tor
