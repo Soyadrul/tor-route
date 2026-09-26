@@ -129,9 +129,11 @@ needs_mountns() {
 }
 
 # ── Stub factories ────────────────────────────────────────────────────────────
-# Every stub appends its arguments to $STUB_LOG and honours CT_TEST_* flags
-# exported by the test, so tests can assert both the command sequence and the
-# decision the script derived from the simulated world.
+# The stub factories below append their arguments to $STUB_LOG and honour
+# CT_TEST_* flags exported by the test, so tests can assert both the command
+# sequence and the decision the script derived from the simulated world.
+# Exceptions: make_stub takes a caller-supplied body, and make_id_stub /
+# make_sleep_stub are silent.
 
 # iptables/ip6tables busybox-style stubs.
 #   CT_TEST_ROUTING=1         -> -S/-L OUTPUT show the Tor REDIRECT rule

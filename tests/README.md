@@ -8,8 +8,9 @@ tests is expected to fail.
 The suite is **safe to run on a development machine**: tests run unprivileged
 and never touch the real firewall, `/etc/resolv.conf`, `/etc/tor/torrc`,
 `/run` or any service. `helpers/setup.bash` sources the script *above* its
-dispatcher, redirects every path the script writes to a per-test temporary
-directory, and stubs external commands on `PATH`. The few tests that need to
+dispatcher, redirects the script's config and state paths to a per-test
+temporary directory, and stubs external commands on `PATH`. The few tests
+that need to
 exercise namespace-related behavior run a throwaway body under `unshare` and
 `skip` themselves when user/network/mount namespaces (or their dependencies)
 are unavailable — they never fall back to touching the host.
@@ -34,9 +35,9 @@ other distros install `bats-core` plus the `bats-support`, `bats-assert` and
 export BATS_LIB_PATH=/usr/lib/bats   # adjust to where the libraries live
 ```
 
-The namespace-based tests use additional tools. If any are missing, or if
-`unshare` cannot create the required namespaces, those specific tests `skip`
-instead of failing:
+The namespace-based and terminal-based tests use additional tools. If any are
+missing, or if `unshare` cannot create the required namespaces, those specific
+tests `skip` instead of failing:
 
 ```bash
 sudo pacman -S util-linux iproute2 iptables conntrack-tools python3
@@ -46,8 +47,9 @@ sudo pacman -S util-linux iproute2 iptables conntrack-tools python3
 |---|---|---|
 | `bats` | test runner | everything |
 | `bats-support`, `bats-assert`, `bats-file` | assertion libraries | everything |
-| `util-linux` | `unshare`, `setsid`, `script`, `mount` | namespace tests, interactive-prompt tests |
-| `iproute2` | `ip`, `ss` | conntrack test |
+| `util-linux` | `unshare`, `setsid`, `script`, `mount`, `flock` | namespace tests, interactive-prompt tests, advisory-lock tests |
+| `coreutils` | `timeout` | interactive-prompt test (pty guard) |
+| `iproute2` | `ip` | conntrack test |
 | `iptables` | `iptables`/`ip6tables` | conntrack test |
 | `conntrack-tools` | `conntrack` | conntrack test |
 | `python3` | test listeners | conntrack test |
@@ -225,8 +227,9 @@ init systems — systemd, OpenRC, Runit and SysVinit — are covered:
 
 - `show_ip` flags an IPv6 address as `LEAK!` only while routing is active,
   prints the host's own address without an alarm when routing is off, reports
-  `Blocked` when an active route has no reachable IPv6, and warns when the
-  IPv4 address cannot be fetched.
+  `Blocked` when an active route has no reachable IPv6 (`not configured /
+  unreachable` while routing is off), and warns when the IPv4 address cannot
+  be fetched.
 - Geo enrichment uses `ipwho.is` when it answers, falls back to `ipwhois.app`
   when the primary is rate-limited or returns an empty body, prints partial
   fields when only the ISP is known, and prints
@@ -242,9 +245,8 @@ init systems — systemd, OpenRC, Runit and SysVinit — are covered:
 
 ### `resolv-conf-replace.bats`
 
-Mount namespace port of `resolv-conf-replace-test.sh`:
-replacing or symlinking over a bind-mounted file must fail (EBUSY) and leave
-no `.tmp` file behind.
+Mount namespace coverage for the replacement helpers: replacing or symlinking
+over a bind-mounted file must fail (EBUSY) and leave no `.tmp` file behind.
 
 ### `service.bats`
 
@@ -325,12 +327,14 @@ calls `setup_test` from its own `setup()`. It:
 - provides stub factories — `make_firewall_stubs`, `make_save_restore_stubs`,
   `make_systemd_stubs`, `make_ss_stub`, `make_journalctl_stub`,
   `make_curl_stub`, `make_conntrack_stub`, `make_id_stub`,
-  `make_sleep_stub`, plus `make_stub` for one-off scripts. Every stub logs its
-  arguments to `$STUB_LOG` and honours `CT_TEST_*` variables the test exports
-  to steer its behavior (e.g. `CT_TEST_IPIFY_FAIL`, `CT_TEST_GEO_PRIMARY=isp`,
-  `CT_TEST_UNMASK_FAIL`);
+  `make_sleep_stub`, plus `make_stub` for one-off scripts. The factories
+  honour `CT_TEST_*` variables the test exports to steer their behavior (e.g.
+  `CT_TEST_IPIFY_FAIL`, `CT_TEST_GEO_PRIMARY=isp`, `CT_TEST_UNMASK_FAIL`) and
+  log their invocations to `$STUB_LOG` for exact-command assertions, except
+  the silent `make_id_stub`/`make_sleep_stub`;
 - provides `hide_commands`, which makes `command -v` report chosen tools as
-  missing without touching `PATH` (BATS itself needs the real `PATH`);
+  missing without touching `PATH` (BATS itself needs the real `PATH`). Each
+  call replaces the previous hidden list, so pass every name in one call;
 - provides skip helpers — `skip_if_root`, `needs_commands`, `needs_netns`,
   `needs_mountns` — used by tests whose prerequisites may be absent.
 
@@ -386,4 +390,5 @@ Follow the existing pattern: `load 'helpers/setup'`, call `setup_test` in
 `setup()`, stub every external command the code path can reach, and prefer
 bats-assert/bats-file assertions (`assert_output --partial`,
 `assert_file_contains`, `assert_file_permission`) over ad-hoc string matching.
-When adding a new test file, add it to the table above.
+When adding or changing tests, keep the overview table and the matching
+per-file section in sync (`bats --count tests/` prints the current counts).
