@@ -1061,7 +1061,7 @@ save_iptables() {
 # ports only: a broad `conntrack -F` would also tear down every established
 # connection that was never routed through Tor (e.g. an SSH session calling
 # `stop` itself). Kept as a named function so
-# tests/conntrack-cleanup-test.sh can exercise it in a throwaway netns.
+# tests/conntrack-cleanup.bats can exercise it in a throwaway netns.
 cleanup_conntrack_tor_ports() {
     command -v conntrack &>/dev/null || {
         echo -e "    ${YELLOW}(conntrack not available, skipping)${RESET}"
@@ -1147,59 +1147,59 @@ apply_iptables() {
         echo -e "${RED}[✗] Tor user not found (looked for: ${TOR_USERS[*]}).${RESET}" >&2
         return 1
     fi
-    # Every mutation runs under set -e inside a subshell: the FIRST failing
-    # command aborts and surfaces as a failure here, instead of half a
-    # ruleset silently passing the later checks. The caller unwinds via
+    # Every rule carries an explicit `|| exit 1`. Do NOT replace this with
+    # `set -e` inside the subshell: bash disables errexit for commands in a
+    # condition context, and this subshell is the condition of `if !`, so an
+    # early failure would be swallowed whenever a later rule succeeded and a
+    # partial ruleset would be reported as success. The caller unwinds via
     # restore_iptables on failure.
     if ! (
-        set -e
-
-        iptables -t nat -F OUTPUT
-        iptables -F OUTPUT
+        iptables -t nat -F OUTPUT || exit 1
+        iptables -F OUTPUT || exit 1
 
         # DNS/UDP port 53 → Tor DNS (excludes Tor's own traffic)
         iptables -t nat -A OUTPUT \
             -m owner ! --uid-owner "$TOR_UID" \
             -p udp --dport 53 \
-            -j REDIRECT --to-ports "$TOR_DNS_PORT"
+            -j REDIRECT --to-ports "$TOR_DNS_PORT" || exit 1
 
         # DNS/TCP port 53 → Tor DNS (large responses fall back to TCP)
         iptables -t nat -A OUTPUT \
             -m owner ! --uid-owner "$TOR_UID" \
             -p tcp --dport 53 \
-            -j REDIRECT --to-ports "$TOR_DNS_PORT"
+            -j REDIRECT --to-ports "$TOR_DNS_PORT" || exit 1
 
         # Tor's own traffic passes untouched (prevents redirect loop)
         iptables -t nat -A OUTPUT \
             -m owner --uid-owner "$TOR_UID" \
-            -j RETURN
+            -j RETURN || exit 1
 
         # LAN/loopback ranges bypass Tor
         for addr in $NON_TOR; do
-            iptables -t nat -A OUTPUT -d "$addr" -j RETURN
+            iptables -t nat -A OUTPUT -d "$addr" -j RETURN || exit 1
         done
 
         # All new TCP connections → Tor transparent proxy
         iptables -t nat -A OUTPUT \
             -p tcp \
             -m state --state NEW \
-            -j REDIRECT --to-ports "$TOR_TRANS_PORT"
+            -j REDIRECT --to-ports "$TOR_TRANS_PORT" || exit 1
 
         # Block all non-DNS UDP (kills WebRTC/QUIC/STUN leaks)
-        iptables -A OUTPUT -m owner --uid-owner "$TOR_UID" -p udp -j ACCEPT
-        iptables -A OUTPUT -p udp --dport 53 -d 127.0.0.1 -j ACCEPT
+        iptables -A OUTPUT -m owner --uid-owner "$TOR_UID" -p udp -j ACCEPT || exit 1
+        iptables -A OUTPUT -p udp --dport 53 -d 127.0.0.1 -j ACCEPT || exit 1
         for addr in $NON_TOR; do
-            iptables -A OUTPUT -p udp -d "$addr" -j ACCEPT
+            iptables -A OUTPUT -p udp -d "$addr" -j ACCEPT || exit 1
         done
-        iptables -A OUTPUT -p udp -j DROP
+        iptables -A OUTPUT -p udp -j DROP || exit 1
 
         # Block all IPv6 (Tor can't proxy it; would leak real IP on dual-stack
         # sites). On kernels without an IPv6 stack there is nothing to leak -
         # skip instead of failing.
         if ipv6_available; then
-            ip6tables -P INPUT   DROP
-            ip6tables -P OUTPUT  DROP
-            ip6tables -P FORWARD DROP
+            ip6tables -P INPUT   DROP || exit 1
+            ip6tables -P OUTPUT  DROP || exit 1
+            ip6tables -P FORWARD DROP || exit 1
 
             # Verify the policies actually took effect. If ip6tables failed
             # silently here despite a working stack, IPv6 traffic would keep
