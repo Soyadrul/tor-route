@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Network-namespace helper for the conntrack cleanup regression (withdrawn
-# BUGS.md #1, kept as a guard). Runs inside `unshare -rn` (caller-enforced)
+# Network-namespace helper for the conntrack cleanup regression (kept as a
+# guard). Runs inside `unshare -rn` (caller-enforced)
 # and must use the REAL iptables/conntrack: it reproduces a REDIRECT rewrite
 # and checks that cleanup removes exactly the Tor-port entries, keeps
 # unrelated ones, and prints no raw conntrack dump.

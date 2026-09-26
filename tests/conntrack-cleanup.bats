@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Conntrack cleanup scoping (withdrawn BUGS.md #1, kept as a guard): cleanup
+# Conntrack cleanup scoping guard: cleanup
 # must delete exactly the entries whose reply source port is a Tor port, keep
 # unrelated flows, and print only its one-line summary. Runs against the real
 # kernel in a throwaway network namespace; skips when unavailable.

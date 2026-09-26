@@ -1,7 +1,6 @@
 #!/usr/bin/env bats
-# torrc management: strip_torrc_block's marker guards (BUGS.md #4),
-# configure_torrc's marked block, cleanup_torrc and the newnode revert path
-# (BUGS.md #3).
+# torrc management: strip_torrc_block's marker guards,
+# configure_torrc's marked block, cleanup_torrc and the newnode revert path.
 
 load 'helpers/setup'
 

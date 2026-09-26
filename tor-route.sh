@@ -24,7 +24,7 @@ TOR_TRANS_PORT=9040
 # DNSPort deliberately avoids 5353 (the standard mDNS/Avahi port): the two
 # sockets can coexist (both set SO_REUSEADDR), but then loopback queries to
 # 127.0.0.1:5353 are answered by Tor instead of avahi, and a non-SO_REUSEADDR
-# holder blocks Tor's startup entirely (BUGS.md #5). 9053 is unprivileged and
+# holder blocks Tor's startup entirely. 9053 is unprivileged and
 # not a common service port.
 TOR_DNS_PORT=9053
 TOR_USERS=(tor debian-tor toranon _tor)
@@ -615,7 +615,7 @@ cmd_countries() {
 # Never let the sed range delete anything outside a well-formed block. Both
 # markers must exist AND be strictly paired: an end marker above its start
 # marker (or nested markers) keeps the counts equal while the range still
-# runs to EOF or swallows the lines in between (BUGS.md #4). On any
+# runs to EOF or swallows the lines in between. On any
 # malformed structure, back the file up and abort.
 strip_torrc_block() {
     [[ -f "$TORRC" ]] || return 0
@@ -725,7 +725,7 @@ cleanup_torrc() {
 # through would pin Tor to a nonexistent country under StrictNodes and kill
 # all traffic. Unlike cleanup_torrc this keeps the block instead of deleting
 # it, so torrc, the state file and the still-live Tor process (which never
-# applied the new config) all agree (BUGS.md #3).
+# applied the new config) all agree.
 revert_torrc_to_previous() {
     local previous="${1:-random}" revert_to=""
     [[ "$previous" != "random" ]] && revert_to="$previous"
@@ -794,7 +794,7 @@ interrupt_unwind() {
 # Write $2 as the full content of $1 via a .tmp sibling + mv, then verify the
 # result. Returns non-zero when $1 cannot be replaced - notably a bind-mounted
 # file, where rename(2) fails with EBUSY and the original mv silently gave up.
-# Callers must warn instead of claiming success (BUGS.md #7).
+# Callers must warn instead of claiming success.
 replace_file_verified() {
     local target="$1" content="$2"
     if ! printf '%s\n' "$content" > "${target}.tmp" 2>/dev/null; then
@@ -884,7 +884,7 @@ fix_dns_start() {
     # Write a plain resolv.conf pointing to 127.0.0.1. The helper uses a tmp
     # file and rename so a crash between rm and echo cannot leave the system
     # with no resolv.conf at all, and verifies the result before we claim
-    # success (BUGS.md #7). iptables will intercept port 53 queries there and
+    # success. iptables will intercept port 53 queries there and
     # forward them to Tor's DNS listener on port ${TOR_DNS_PORT}.
     if ! replace_file_verified /etc/resolv.conf "nameserver 127.0.0.1"; then
         echo -e "${RED}[✗] Could not replace /etc/resolv.conf - it was NOT repointed at Tor's DNS listener (bind mount?).${RESET}" >&2
@@ -1003,7 +1003,7 @@ ipv6_available() {
 # Classify the IPv6 OUTPUT chain policy for display: "blocked" (policy DROP),
 # "allowed" (any other policy) or "unavailable" (no usable IPv6 stack, so
 # nothing can leak). `status` uses this so it does not cry "leak possible" on
-# kernels booted with ipv6.disable=1 (BUGS.md #6).
+# kernels booted with ipv6.disable=1.
 ipv6_policy_state() {
     if ! ipv6_available; then
         echo "unavailable"
@@ -1273,7 +1273,7 @@ show_ip() {
     ip6=$(curl -s --max-time 5 -6 https://api6.ipify.org 2>/dev/null)
     # A reachable IPv6 address is only a leak while the IPv6 DROP policy is
     # supposed to be active. With routing off it is just the host's own
-    # address (BUGS.md #2), so report it without the alarm; report "Blocked"
+    # address, so report it without the alarm; report "Blocked"
     # only when routing is on and IPv6 really is unreachable.
     if is_routing_active; then
         [[ -n "$ip6" ]] \
@@ -1438,7 +1438,7 @@ cmd_start() {
     # Swap resolv.conf only once the redirect rules exist, so the system's
     # DNS keeps working until then instead of pointing at a dead
     # 127.0.0.1:53 for the whole bootstrap. fix_dns_start verifies the swap;
-    # on failure unwind exactly like any other start error (BUGS.md #7).
+    # on failure unwind exactly like any other start error.
     if ! fix_dns_start; then
         echo -e "\n${RED}[✗] DNS setup failed - restoring normal internet...${RESET}"
         restore_iptables

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# resolv.conf replacement helpers against bind mounts (BUGS.md #7): a
+# resolv.conf replacement helpers against bind mounts: a
 # rename(2) onto a bind-mounted file fails with EBUSY, and callers must see
 # the failure. Runs in a throwaway mount+user namespace so the bind mounts
 # cannot affect the host; skips when namespaces are unavailable.

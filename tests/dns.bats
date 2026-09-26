@@ -8,7 +8,7 @@ load 'helpers/setup'
 
 setup() { setup_test; }
 
-# Ported from dns-port-test.sh (BUGS.md #5): the DNSPort must stay off the
+# Ported from dns-port-test.sh: the DNSPort must stay off the
 # mDNS/Avahi port and the README must document the real port.
 @test "DNSPort stays off the mDNS port and is documented in the README" {
     [[ "$TOR_DNS_PORT" != "5353" ]]

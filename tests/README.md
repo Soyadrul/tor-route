@@ -104,8 +104,8 @@ then runs `cleanup_conntrack_tor_ports` and checks that:
 - the function prints only its one-line summary — conntrack's raw per-entry
   `src=`/`dst=` dump must not leak to the user.
 
-Guards the withdrawn BUGS.md #1: keep the native `--reply-port-src` filter, do
-not replace it with text parsing.
+Guards the cleanup scoping: keep the native `--reply-port-src` filter, do not
+replace it with text parsing.
 
 ### `country.bats`
 
@@ -129,11 +129,10 @@ not replace it with text parsing.
 ### `dns.bats`
 
 - `TOR_DNS_PORT` is off the mDNS/Avahi port 5353, above 1023, and is the port
-  documented in the README (ported `dns-port-test.sh`, BUGS.md #5).
+  documented in the README.
 - `replace_file_verified` and `link_file_verified` succeed, fail when the
   target cannot be written/linked, and — importantly — detect the case where
-  the underlying `mv`/`ln` silently did nothing instead of trusting them
-  (BUGS.md #7).
+  the underlying `mv`/`ln` silently did nothing instead of trusting them.
 - `fix_dns_start` refuses symlinked state files before touching anything
   (non-namespace), and in a mount namespace: backs up `/etc/resolv.conf`
   (`0600`), records whether a resolver was running and which units it newly
@@ -242,7 +241,7 @@ file, so this is the only place the real detection runs:
 
 ### `resolv-conf-replace.bats`
 
-Mount namespace port of `resolv-conf-replace-test.sh` (BUGS.md #7):
+Mount namespace port of `resolv-conf-replace-test.sh`:
 replacing or symlinking over a bind-mounted file must fail (EBUSY) and leave
 no `.tmp` file behind.
 
@@ -349,7 +348,7 @@ modified. Selected by a mode argument:
 
 | Mode | Checks |
 |---|---|
-| `replace-bind` | `replace_file_verified`/`link_file_verified` against bind mounts (BUGS.md #7) |
+| `replace-bind` | `replace_file_verified`/`link_file_verified` against bind mounts |
 | `fix-dns-start` | backup, masking record, verified swap; resolver running, stopped and non-systemd |
 | `fix-dns-start-bind-fail` | `fix_dns_start` fails and does not claim a failed swap |
 | `fix-dns-stop` | no-op guard, backup restore, generic fallback, unmask record and fallback list (incl. failures), failed symlink/backup/fallback writes, non-systemd |

@@ -33,7 +33,7 @@ write_resolv() {
 
 case "$MODE" in
 replace-bind)
-    # Ported from resolv-conf-replace-test.sh (BUGS.md #7): the helpers must
+    # Ported from resolv-conf-replace-test.sh: the helpers must
     # report failure (and leave no .tmp) when rename(2) cannot replace the
     # file because it is a bind mount.
     tmp="$TEST_TMP/replace"
@@ -110,7 +110,7 @@ fix-dns-start)
     ;;
 
 fix-dns-start-bind-fail)
-    # BUGS.md #7: when the swap cannot happen (bind mount), fix_dns_start must
+    # When the swap cannot happen (bind mount), fix_dns_start must
     # return non-zero and must not claim the resolver was repointed.
     isolate_etc
     write_resolv "nameserver 198.51.100.53"
@@ -194,7 +194,7 @@ fix-dns-stop)
 
     # A bind-mounted resolv.conf can neither be symlinked nor rewritten: the
     # symlink failure falls through and the final fallback write is reported
-    # as failed instead of claiming success (BUGS.md #7).
+    # as failed instead of claiming success.
     rm -rf "$STATE_DIR"
     mkdir -p "$STATE_DIR"
     printf 'yes\n' > "$RESOLVED_STATE_FILE"
