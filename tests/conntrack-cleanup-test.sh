@@ -103,7 +103,14 @@ wait_for_entry tcp "$TOR_TRANS_PORT" || fail "no TCP entry with reply source por
 wait_for_entry udp "$TOR_DNS_PORT"   || fail "no UDP entry with reply source port $TOR_DNS_PORT"
 wait_for_entry tcp "$UNRELATED_PORT" || fail "unrelated TCP entry (port $UNRELATED_PORT) missing"
 
-cleanup_conntrack_tor_ports
+# cleanup's only intended output is its one-line summary. conntrack -D echoes
+# every deleted flow to stdout, so without an explicit redirect `stop` would
+# dump the raw entries at the user.
+cleanup_output=$(cleanup_conntrack_tor_ports 2>&1)
+[[ "$cleanup_output" == *"Removed stale conntrack entries pointing at Tor's ports."* ]] \
+    || fail "cleanup summary line missing from output"
+[[ "$cleanup_output" != *"src="* && "$cleanup_output" != *"dst="* ]] \
+    || fail "cleanup leaked raw conntrack entries to its output"
 
 [[ -z "$(reply_entries tcp "$TOR_TRANS_PORT")" ]] || fail "Tor TCP entry survived cleanup"
 [[ -z "$(reply_entries udp "$TOR_DNS_PORT")" ]]   || fail "Tor UDP entry survived cleanup"

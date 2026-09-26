@@ -1070,9 +1070,12 @@ cleanup_conntrack_tor_ports() {
     local found=0
     # conntrack -D exits 0 only when it deleted at least one entry; a
     # nonzero status here just means nothing matched (or a netlink error,
-    # which stop's root context avoids).
-    conntrack -D -p tcp --reply-port-src "$TOR_TRANS_PORT" 2>/dev/null && found=1
-    conntrack -D -p udp --reply-port-src "$TOR_DNS_PORT" 2>/dev/null && found=1
+    # which stop's root context avoids). It also echoes every deleted flow
+    # to stdout, so suppress both streams - the summary line below is the
+    # only output, and the exit status still reports whether anything was
+    # deleted.
+    conntrack -D -p tcp --reply-port-src "$TOR_TRANS_PORT" &>/dev/null && found=1
+    conntrack -D -p udp --reply-port-src "$TOR_DNS_PORT" &>/dev/null && found=1
     if [[ $found -eq 1 ]]; then
         echo -e "    Removed stale conntrack entries pointing at Tor's ports."
     else
