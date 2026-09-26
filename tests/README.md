@@ -82,7 +82,7 @@ Additional options:
 | [`dispatch.bats`](#dispatchbats) | 8 | command dispatcher, root gate, usage, argument validation |
 | [`dns.bats`](#dnsbats) | 12 | `resolv.conf` helpers and `fix_dns_start`/`fix_dns_stop` |
 | [`flows.bats`](#flowsbats) | 33 | `start`/`stop`/`newnode` control flow and every unwind stage |
-| [`init.bats`](#initbats) | 11 | init-system detection and configuration |
+| [`init.bats`](#initbats) | 11 | init-system detection and configuration (systemd, OpenRC, Runit, SysVinit) |
 | [`iptables.bats`](#iptablesbats) | 20 | firewall ruleset, save/restore guards, routing/port checks |
 | [`probes.bats`](#probesbats) | 17 | `show_ip`, traffic probes, country-pin fallback |
 | [`resolv-conf-replace.bats`](#resolv-conf-replacebats) | 1 | replacement helpers against bind mounts (mount ns) |
@@ -184,16 +184,17 @@ command stubbed:
 ### `init.bats`
 
 `detect_init` and `require_init` are otherwise shadowed by every other test
-file, so this is the only place the real detection runs:
+file, so this is the only place the real detection runs. All four supported
+init systems — systemd, OpenRC, Runit and SysVinit — are covered:
 
 - `detect_init` maps pid1 names (`systemd`, `openrc-init`/`openrc`, `runit`),
   distinguishes SysVinit from OpenRC for pid1 `init`, and falls back to
   `systemctl`/`rc-service`/`runsvdir` for unknown pid1 values — failing when
   none is available.
 - `require_init` populates the three systemd-resolved units and an empty log
-  source on systemd, the per-init log paths (`/var/log/tor/log`,
-  `/var/log/tor/current`) otherwise, rejects unsupported init values and
-  aborts when detection fails.
+  source on systemd, and the per-init log paths otherwise: `/var/log/tor/log`
+  for OpenRC and SysVinit, `/var/log/tor/current` for Runit. It rejects
+  unsupported init values and aborts when detection fails.
 
 ### `iptables.bats`
 
