@@ -1246,17 +1246,26 @@ show_ip() {
         # to, over HTTPS - a plaintext query would let anyone on the path
         # (including the exit node itself) see or tamper with the answer.
         # ipwho.is serves the free JSON endpoint without an API key
-        # (ip-api.com's free tier is HTTP-only).
-        local geo
-        geo=$(curl -s --max-time 8 "https://ipwho.is/${ip}" 2>/dev/null)
-        if [[ -n "$geo" ]]; then
-            local country_name country_code isp
+        # (ip-api.com's free tier is HTTP-only), but its quota is counted per
+        # client IP - under Tor that client is a shared exit node, so busy
+        # exits get HTTP 429 ({"success":false,...}, which parses to empty
+        # fields). Fall back to ipwhois.app (keyless HTTPS, same flat JSON
+        # shape) before giving up instead of silently dropping the lines.
+        local geo country_name country_code isp geo_url geo_ok=0
+        for geo_url in "https://ipwho.is/${ip}" "https://ipwhois.app/json/${ip}"; do
+            geo=$(curl -s --max-time 8 "$geo_url" 2>/dev/null)
+            [[ -n "$geo" ]] || continue
             country_name=$(echo "$geo" | grep -o '"country"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
             country_code=$(echo "$geo" | grep -o '"country_code"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
             isp=$(echo "$geo" | grep -o '"isp"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4)
-            [[ -n "$country_name" ]] && echo -e "    Country: ${BOLD}${country_name} (${country_code})${RESET}"
-            [[ -n "$isp"          ]] && echo -e "    ISP/Org: ${BOLD}${isp}${RESET}"
-        fi
+            if [[ -n "$country_name" || -n "$isp" ]]; then
+                [[ -n "$country_name" ]] && echo -e "    Country: ${BOLD}${country_name} (${country_code})${RESET}"
+                [[ -n "$isp"          ]] && echo -e "    ISP/Org: ${BOLD}${isp}${RESET}"
+                geo_ok=1
+                break
+            fi
+        done
+        [[ $geo_ok -eq 1 ]] || echo -e "    ${YELLOW}Country/ISP: lookup unavailable.${RESET}"
     else
         echo -e "    ${YELLOW}IPv4: could not fetch (Tor may still be starting).${RESET}"
     fi

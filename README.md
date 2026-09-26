@@ -175,7 +175,7 @@ sudo tor-route stop
 
 > **Atomic backups.** Every firewall dump and `resolv.conf` replacement is written to a `.tmp` sibling and atomically `mv`-ed into place, and every backup in `/run/tor-route` (fallback `/tmp/tor-route`) is `chmod 600`. A `Ctrl+C` mid-write therefore cannot leave a truncated file that `restore_iptables` would mistake for a complete backup; stray `.tmp` files are inert and ignored on the next run.
 
-> **External HTTPS requests.** The script only contacts four hosts, all over `https://` — `api.ipify.org` with `-4`, `api6.ipify.org` with `-6`, `check.torproject.org` with `-4`, `ipwho.is/<ip>` without an explicit `-4`/`-6` flag but still covered by the IPv6 `DROP` policy and the `OUTPUT` redirect when routing is active — and only to implement the features below. When routing is active the requests themselves go through Tor (via the `nat OUTPUT` redirect), so the remote host only ever sees the exit IP; when routing is off they go direct.
+> **External HTTPS requests.** The script only contacts five hosts, all over `https://` — `api.ipify.org` with `-4`, `api6.ipify.org` with `-6`, `check.torproject.org` with `-4`, `ipwho.is/<ip>` and its fallback `ipwhois.app/json/<ip>` without an explicit `-4`/`-6` flag but still covered by the IPv6 `DROP` policy and the `OUTPUT` redirect when routing is active — and only to implement the features below. When routing is active the requests themselves go through Tor (via the `nat OUTPUT` redirect), so the remote host only ever sees the exit IP; when routing is off they go direct.
 
 | Host | Purpose |
 |---|---|
@@ -183,6 +183,7 @@ sudo tor-route stop
 | `https://api6.ipify.org` | IPv6 leak test (`-6`); `LEAK!` vs `Blocked ✓` |
 | `https://check.torproject.org` | Fallback probe during `start` if `api.ipify.org` is unavailable |
 | `https://ipwho.is/<ip>` | Country/ISP enrichment for the IP already fetched |
+| `https://ipwhois.app/json/<ip>` | Fallback country/ISP enrichment when `ipwho.is` is rate-limited (`HTTP 429`) or unreachable |
 
 ### `start [CC]`
 
@@ -192,7 +193,7 @@ sudo tor-route stop
 4. Verifies that Tor is actually listening on both expected ports.
 5. Backs up existing `iptables` and `ip6tables` rules via `.tmp` siblings (atomic `mv`, see note above), then applies the Tor redirect rules. Either save failing (missing tools, kernel issue) aborts `start` and deletes both backups before anything is touched; empty but successful saves are accepted as a valid no-rules baseline. After applying, it verifies the IPv6 DROP policies actually took effect (`ip6tables -L OUTPUT -n | grep "policy DROP"`) and aborts (with a full `restore_iptables`) if they did not — it never claims success while IPv6 could still leak.
 6. Records whether a DNS resolver was running beforehand. On **systemd**, this masks `systemd-resolved` and its socket units to prevent socket activation from reviving it — recording which units were not already masked beforehand so `stop` only undoes its own changes and leaves deliberately-masked units alone. On other inits, no masking is needed. Replaces `/etc/resolv.conf` with a file pointing to `127.0.0.1`, so all DNS queries go to Tor's local DNS listener. The swap is verified; if it fails (e.g. `/etc/resolv.conf` is a bind mount), `start` unwinds and exits instead of claiming success. This is done only now, so the rest of your system keeps working while Tor bootstraps — there is no DNS outage during startup.
-7. Announces success only once a request actually travels through Tor. The probe tries `https://api.ipify.org` (`-4`, short timeout) and falls back to `https://check.torproject.org` if the first host is down or blocked. Afterwards `show_ip` fetches the public IPv4 from `https://api.ipify.org`, enriches it via `https://ipwho.is/<ip>` for country/ISP (only the IP already displayed is sent), and checks `https://api6.ipify.org` (`-6`) — if it answers, IPv6 is leaking. All four hosts are `https://` only (see the table in [Shared notes](#shared-notes)). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet. **When a country code was given and the probe fails**, `start` asks what to do: use a random exit node (reconfigures torrc without the pin, reloads Tor, probes again) or abort (full unwind — firewall, DNS and Tor restored, exits 1). Non-interactive sessions, EOF and timeouts default to **abort**.
+7. Announces success only once a request actually travels through Tor. The probe tries `https://api.ipify.org` (`-4`, short timeout) and falls back to `https://check.torproject.org` if the first host is down or blocked. Afterwards `show_ip` fetches the public IPv4 from `https://api.ipify.org`, enriches it via `https://ipwho.is/<ip>` (falling back to `https://ipwhois.app/json/<ip>` when the primary is rate-limited or down) for country/ISP (only the IP already displayed is sent), and checks `https://api6.ipify.org` (`-6`) — if it answers, IPv6 is leaking. All five hosts are `https://` only (see the table in [Shared notes](#shared-notes)). If Tor is still bootstrapping when the probe gives up, it prints a warning instead of claiming success — the rules are active but the traffic isn't flowing yet. **When a country code was given and the probe fails**, `start` asks what to do: use a random exit node (reconfigures torrc without the pin, reloads Tor, probes again) or abort (full unwind — firewall, DNS and Tor restored, exits 1). Non-interactive sessions, EOF and timeouts default to **abort**.
 
 If routing is already active (the Tor redirect rule is present), `start` refuses to re-apply and exits instead — re-running it would overwrite the firewall and DNS backups with the current Tor state, so a later `stop` would restore the wrong data. Run `stop` first to re-apply, or `newnode` to change the exit node.
 
@@ -353,7 +354,11 @@ The mutating commands (`start`, `stop`, `newnode`) are serialized with a non-blo
 
 **Geo lookup shows the wrong country**
 
-`status` (and the `show_ip` helper) fetches your public IP from `https://api.ipify.org` (`-4`) and then resolves the country/ISP via `https://ipwho.is/<ip>` — when routing is active that second request also goes through Tor, so the lookup sees the *exit* IP. When routing is off it goes direct and sees your real IP. No extra data is sent; only the IP already displayed is looked up.
+`status` (and the `show_ip` helper) fetches your public IP from `https://api.ipify.org` (`-4`) and then resolves the country/ISP via `https://ipwho.is/<ip>`, falling back to `https://ipwhois.app/json/<ip>` when the primary is rate-limited or unreachable — when routing is active that request also goes through Tor, so the lookup sees the *exit* IP. When routing is off it goes direct and sees your real IP. No extra data is sent; only the IP already displayed is looked up.
+
+**Country/ISP line says "lookup unavailable"**
+
+The free geo endpoint (`ipwho.is`) allows 1,000 requests/day per client IP; when routing is active that client is a shared Tor exit node, so busy exits answer `HTTP 429`. `show_ip` falls back to `ipwhois.app`; if every provider fails (rate-limited, unreachable, or malformed response), the country/ISP lines are replaced by `Country/ISP: lookup unavailable.` — the IP itself is still correct. Re-running later or after `newnode` picks a new exit usually recovers.
 
 ---
 
@@ -381,7 +386,7 @@ State files live under `$STATE_DIR` (`/run/tor-route`, fallback `/tmp/tor-route`
 - This script is intended for **personal privacy use** on your own machine.
 - Only traffic originating from this machine is routed through Tor — other devices on your local network are not covered.
 - The firewall and `resolv.conf` backups written to `/run/tor-route` (fallback `/tmp/tor-route`) during a session are created root-only (`0600`) inside a `0700` directory, since they reveal parts of your network topology. The lock file is also created `0600` and a pre-existing symlink at that path or its parent directory is refused.
-- The country/ISP line in `status` comes from a lookup of the IP already shown (`https://ipwho.is/<ip>`). When routing is active the lookup itself goes through Tor, so the service only ever sees the exit IP; when routing is off it goes direct. No other data is sent.
+- The country/ISP line in `status` comes from a lookup of the IP already shown (`https://ipwho.is/<ip>`, falling back to `https://ipwhois.app/json/<ip>` when the primary is rate-limited or unreachable). When routing is active the lookup itself goes through Tor, so the service only ever sees the exit IP; when routing is off it goes direct. No other data is sent.
 - Using Tor may be restricted or illegal in some countries — check your local laws.
 - For maximum anonymity, use the [Tor Browser](https://www.torproject.org/download/) which includes additional fingerprinting protections that this script cannot provide.
 
