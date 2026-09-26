@@ -612,28 +612,57 @@ cmd_countries() {
 # appended by configure_torrc). Any TransPort/DNSPort/ExitNodes lines that
 # existed BEFORE tor-route (outside the markers) are left untouched.
 #
-# Never let the sed range extend to EOF: if the start marker exists without
-# the end marker (partial write, crash, power loss), an unbounded range would
-# delete everything below the marker, including user-owned lines (BUGS.md
-# #4). In that case back the file up and abort instead.
+# Never let the sed range delete anything outside a well-formed block. Both
+# markers must exist AND be strictly paired: an end marker above its start
+# marker (or nested markers) keeps the counts equal while the range still
+# runs to EOF or swallows the lines in between (BUGS.md #4). On any
+# malformed structure, back the file up and abort.
 strip_torrc_block() {
     [[ -f "$TORRC" ]] || return 0
-    local starts ends
-    starts=$(grep -c '^# --- tor-route.sh start ---$' "$TORRC" 2>/dev/null)
-    ends=$(grep -c '^# --- tor-route.sh end ---$' "$TORRC" 2>/dev/null)
-    starts=${starts:-0}
-    ends=${ends:-0}
+    # One pass over the file tracks the marker counts and the pairing: a
+    # start while already inside a block, an end while outside one, or an
+    # unclosed block at EOF are all malformed.
+    local line in_block=0 malformed=0 starts=0 ends=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            '# --- tor-route.sh start ---')
+                starts=$((starts + 1))
+                if [[ "$in_block" -eq 1 ]]; then malformed=1; fi
+                in_block=1
+                ;;
+            '# --- tor-route.sh end ---')
+                ends=$((ends + 1))
+                if [[ "$in_block" -eq 0 ]]; then malformed=1; fi
+                in_block=0
+                ;;
+        esac
+    done < "$TORRC"
+    if [[ "$in_block" -eq 1 ]]; then malformed=1; fi
+
     if [[ "$starts" -eq 0 && "$ends" -eq 0 ]]; then
         return 0
     fi
-    if [[ "$starts" -ne "$ends" ]]; then
+    if [[ "$starts" -ne "$ends" || "$malformed" -eq 1 ]]; then
         local backup="${TORRC}.tor-route-unterminated.$(date +%s)"
-        cp "$TORRC" "$backup" 2>/dev/null || true
-        echo -e "${RED}[✗] torrc has ${starts} start marker(s) but ${ends} end marker(s) - refusing to edit it.${RESET}" >&2
-        echo -e "    ${YELLOW}Backup written to ${backup}; fix or remove the block, then retry.${RESET}" >&2
+        if [[ "$starts" -ne "$ends" ]]; then
+            echo -e "${RED}[✗] torrc has ${starts} start marker(s) but ${ends} end marker(s) - refusing to edit it.${RESET}" >&2
+        else
+            echo -e "${RED}[✗] torrc's start/end markers are out of order or nested - refusing to edit it.${RESET}" >&2
+        fi
+        if cp "$TORRC" "$backup" 2>/dev/null; then
+            echo -e "    ${YELLOW}Backup written to ${backup}; fix or remove the block, then retry.${RESET}" >&2
+        else
+            # A partial backup (e.g. ENOSPC) must not linger and be mistaken
+            # for a usable copy of the file.
+            rm -f "$backup" 2>/dev/null
+            echo -e "    ${YELLOW}Could not write a backup (${backup}); the file was left untouched - fix or remove the block, then retry.${RESET}" >&2
+        fi
         exit 1
     fi
-    sed -i '/^# --- tor-route.sh start ---$/,/^# --- tor-route.sh end ---$/d' "$TORRC" 2>/dev/null
+    # The delete must match literally, exactly like the case guard above:
+    # unescaped dots let a lookalike (tor-routeXsh start) open the range and
+    # delete the lines between it and the real end marker.
+    sed -i '/^# --- tor-route\.sh start ---$/,/^# --- tor-route\.sh end ---$/d' "$TORRC" 2>/dev/null
 }
 
 configure_torrc() {
