@@ -406,7 +406,7 @@ State files live under `$STATE_DIR` (`/run/tor-route`, fallback `/tmp/tor-route`
 - [ ] Auto-start service — command flag to enable Tor routing at boot
 - [ ] `--dry-run` — preview what `start`/`stop` would do without applying
 - [ ] Multi-distro installer — detect distro and install dependencies automatically
-- [x] BATS tests — regression suite in `tests/*.bats`; run with `bats tests/`
+- [x] BATS tests — regression suite in `tests/`; run with `bats tests/` (see [`tests/README.md`](tests/README.md))
 - [ ] Desktop notifications — alert on IP/country change via `newnode`
 
 ---
