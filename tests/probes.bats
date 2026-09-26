@@ -80,6 +80,23 @@ setup() {
     refute_output --partial "Country:"
 }
 
+@test "show_ip falls back when the primary geo provider returns an empty body" {
+    export CT_TEST_IPV4=203.0.113.7 CT_TEST_GEO_PRIMARY=empty CT_TEST_GEO_FALLBACK=ok
+    run show_ip
+    assert_success
+    assert_output --partial "Country: France (FR)"
+    assert_output --partial "ISP/Org: Fallback ISP"
+    assert_file_contains "$STUB_LOG" 'ipwhois.app/json/203.0.113.7'
+}
+
+@test "show_ip prints partial geo fields when only the ISP is known" {
+    export CT_TEST_IPV4=203.0.113.7 CT_TEST_GEO_PRIMARY=isp
+    run show_ip
+    assert_success
+    assert_output --partial "ISP/Org: Only ISP"
+    refute_output --partial "Country:"
+}
+
 # ── probe_traffic / wait_for_new_ip ───────────────────────────────────────────
 
 @test "probe_traffic returns success as soon as a request succeeds" {
@@ -87,6 +104,13 @@ setup() {
     run probe_traffic
     assert_success
     assert_output --partial "."
+}
+
+@test "probe_traffic falls back to check.torproject.org when ipify is unreachable" {
+    export CT_TEST_CURL_OK=1 CT_TEST_IPIFY_FAIL=1
+    run probe_traffic
+    assert_success
+    assert_file_contains "$STUB_LOG" 'check.torproject.org'
 }
 
 @test "probe_traffic gives up after its bounded retries" {
@@ -124,4 +148,26 @@ setup() {
     " </dev/null
     assert_failure
     assert_output --partial "Traffic is not flowing with the exit node pinned to DE"
+}
+
+@test "prompt_country_fallback accepts 'r' and defaults to abort for anything else on a terminal" {
+    needs_commands script timeout
+
+    # `script` allocates a pty and forwards its stdin to it, so /dev/tty
+    # inside the child is that pty and the interactive branch is reachable.
+    cat > "$TEST_TMP/ask.sh" <<EOF
+source '$HELPERS_DIR/setup.bash'
+TEST_TMP='$TEST_TMP' init_test_env
+prompt_country_fallback de
+echo "RC=\$?"
+EOF
+
+    run timeout 20 script -qec "bash '$TEST_TMP/ask.sh'" /dev/null <<< "r"
+    assert_success
+    assert_output --partial "Choice [a/r]"
+    assert_output --partial "RC=0"
+
+    run timeout 20 script -qec "bash '$TEST_TMP/ask.sh'" /dev/null <<< "a"
+    assert_success
+    assert_output --partial "RC=1"
 }

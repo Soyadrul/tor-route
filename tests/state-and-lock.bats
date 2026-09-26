@@ -71,3 +71,24 @@ setup() { setup_test; }
 
     exec 8>&-
 }
+
+@test "ensure_state_dir reports a state directory that cannot be created" {
+    skip_if_root
+    mkdir -p "$TEST_TMP/readonly-parent"
+    chmod 500 "$TEST_TMP/readonly-parent"
+    STATE_DIR="$TEST_TMP/readonly-parent/state"
+
+    run ensure_state_dir
+    assert_failure
+    assert_output --partial "Could not create state directory"
+
+    chmod 700 "$TEST_TMP/readonly-parent"
+}
+
+@test "acquire_command_lock warns but continues when flock is unavailable" {
+    hide_commands flock
+
+    run acquire_command_lock
+    assert_success
+    assert_output --partial "running WITHOUT protection against concurrent runs"
+}

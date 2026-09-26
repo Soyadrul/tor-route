@@ -11,6 +11,7 @@ setup() {
     make_firewall_stubs
     make_save_restore_stubs
     make_conntrack_stub
+    make_ss_stub
 }
 
 @test "apply_iptables installs the documented NAT and filter rules" {
@@ -75,6 +76,15 @@ setup() {
     assert_success
     assert_output --partial "IPv6 not available"
     assert_file_not_contains "$STUB_LOG" 'ip6tables -P'
+}
+
+@test "apply_iptables re-detects the Tor user when it was unknown at load time" {
+    TOR_UID="" TOR_USER=""
+    detect_tor_user() { TOR_UID="4242"; TOR_USER="tor"; }
+
+    run apply_iptables
+    assert_success
+    assert_file_contains "$STUB_LOG" '^iptables -t nat -A OUTPUT -m owner --uid-owner 4242 -j RETURN$'
 }
 
 # ── save_iptables ─────────────────────────────────────────────────────────────
@@ -162,6 +172,64 @@ setup() {
     assert_output --partial "FAILED to restore iptables rules"
     assert_file_exists "$IPTABLES_BACKUP"
     assert_file_not_exists "$IP6TABLES_BACKUP"
+}
+
+@test "restore_iptables handles a session with only an IPv6 backup" {
+    mkdir -p "$STATE_DIR"
+    printf 'PRE-TOR-V6-RULES\n' > "$IP6TABLES_BACKUP"
+
+    run restore_iptables
+    assert_success
+    assert_output --partial "No iptables backup to restore"
+    assert_file_contains "$STUB_LOG" '^ip6tables-restore$'
+    assert_file_not_exists "$IP6TABLES_BACKUP"
+}
+
+@test "restore_iptables keeps the IPv6 backup when its restore fails" {
+    mkdir -p "$STATE_DIR"
+    printf 'PRE-TOR-V4-RULES\n' > "$IPTABLES_BACKUP"
+    printf 'PRE-TOR-V6-RULES\n' > "$IP6TABLES_BACKUP"
+    export CT_TEST_RESTORE_FAIL=v6
+
+    run restore_iptables
+    assert_failure
+    assert_output --partial "FAILED to restore ip6tables rules"
+    assert_file_not_exists "$IPTABLES_BACKUP"
+    assert_file_exists "$IP6TABLES_BACKUP"
+}
+
+@test "restore_iptables skips IPv6 policy resets when there is no IPv6 stack" {
+    mkdir -p "$STATE_DIR"
+    printf 'PRE-TOR-V4-RULES\n' > "$IPTABLES_BACKUP"
+    export CT_TEST_IPV6=unavailable
+
+    run restore_iptables
+    assert_success
+    assert_file_contains "$STUB_LOG" '^iptables-restore$'
+    assert_file_not_contains "$STUB_LOG" '^ip6tables -P'
+}
+
+@test "cleanup_conntrack_tor_ports skips cleanly when conntrack is not installed" {
+    hide_commands conntrack
+
+    run cleanup_conntrack_tor_ports
+    assert_success
+    assert_output --partial "conntrack not available, skipping"
+}
+
+@test "verify_tor_ports reports missing listeners and succeeds once both ports listen" {
+    export CT_TEST_PORTS=0
+    run verify_tor_ports
+    assert_failure
+    assert_output --partial "TransPort ${TOR_TRANS_PORT}: NOT listening"
+    assert_output --partial "DNSPort   ${TOR_DNS_PORT}:  NOT listening"
+    assert_output --partial "Tor is not listening on required ports"
+
+    export CT_TEST_PORTS=1
+    run verify_tor_ports
+    assert_success
+    assert_output --partial "TransPort ${TOR_TRANS_PORT}: Listening ✓"
+    assert_output --partial "DNSPort   ${TOR_DNS_PORT}:  Listening ✓"
 }
 
 # ── routing detection and IPv6 classification ─────────────────────────────────

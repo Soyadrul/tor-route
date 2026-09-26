@@ -235,6 +235,11 @@ case "$*" in
             *)           echo "enabled" ;;
         esac
         exit 0 ;;
+    "unmask "*)
+        if [[ -n "${CT_TEST_UNMASK_FAIL:-}" && "$2" == "${CT_TEST_UNMASK_FAIL}" ]]; then
+            exit 1
+        fi
+        exit 0 ;;
     "kill --signal=SIGHUP tor")
         [[ "${CT_TEST_RELOAD_FAIL:-0}" == "1" ]] && exit 1 || exit 0 ;;
 esac
@@ -269,9 +274,10 @@ STUB
 # curl stub with per-URL behaviour:
 #   CT_TEST_IPV4=<addr>        -> api.ipify.org body (empty => exit 22)
 #   CT_TEST_IPV4_FILE=<file>   -> api.ipify.org walks the file line by line
+#   CT_TEST_IPIFY_FAIL=1       -> api.ipify.org fails even when CT_TEST_CURL_OK=1
 #   CT_TEST_CURL_OK=1          -> any ipify/check.torproject request succeeds
 #   CT_TEST_IPV6_ADDR=<addr>   -> api6.ipify.org body (empty => exit 22)
-#   CT_TEST_GEO_PRIMARY=ok|ratelimited|empty
+#   CT_TEST_GEO_PRIMARY=ok|ratelimited|isp|empty
 #   CT_TEST_GEO_FALLBACK=ok|fail
 make_curl_stub() {
     make_stub curl <<'STUB'
@@ -286,6 +292,7 @@ case "$url" in
         if [[ -n "${CT_TEST_IPV6_ADDR:-}" ]]; then echo "$CT_TEST_IPV6_ADDR"; exit 0; fi
         exit 22 ;;
     *api.ipify.org*)
+        [[ "${CT_TEST_IPIFY_FAIL:-0}" == "1" ]] && exit 22
         if [[ -n "${CT_TEST_IPV4_FILE:-}" ]]; then
             n=$(cat "${CT_TEST_IPV4_FILE}.n" 2>/dev/null || echo 0)
             n=$((n + 1))
@@ -302,6 +309,7 @@ case "$url" in
         case "${CT_TEST_GEO_PRIMARY:-empty}" in
             ok)          echo '{"country":"Germany","country_code":"DE","isp":"Primary ISP"}' ;;
             ratelimited) echo '{"success":false,"message":"Rate limit exceeded"}' ;;
+            isp)         echo '{"isp":"Only ISP"}' ;;
         esac
         exit 0 ;;
     *ipwhois.app*)

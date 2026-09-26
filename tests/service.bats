@@ -48,6 +48,10 @@ STUB
 
     run service_tor_start
     assert_success
+    run service_tor_stop
+    assert_success
+    run service_tor_restart
+    assert_success
     run service_tor_reload
     assert_success
     run service_tor_running
@@ -57,6 +61,8 @@ STUB
     assert_failure
 
     assert_file_contains "$STUB_LOG" '^rc-service tor start$'
+    assert_file_contains "$STUB_LOG" '^rc-service tor stop$'
+    assert_file_contains "$STUB_LOG" '^rc-service tor restart$'
     assert_file_contains "$STUB_LOG" '^rc-service tor reload$'
     assert_file_contains "$STUB_LOG" '^rc-service tor status$'
 }
@@ -72,6 +78,10 @@ STUB
 
     run service_tor_start
     assert_success
+    run service_tor_stop
+    assert_success
+    run service_tor_restart
+    assert_success
     run service_tor_reload
     assert_success
     run service_tor_running
@@ -81,25 +91,34 @@ STUB
     assert_failure
 
     assert_file_contains "$STUB_LOG" '^sv start tor$'
+    assert_file_contains "$STUB_LOG" '^sv stop tor$'
+    assert_file_contains "$STUB_LOG" '^sv restart tor$'
     assert_file_contains "$STUB_LOG" '^sv reload tor$'
     assert_file_contains "$STUB_LOG" '^sv status tor$'
 }
 
-@test "an unknown init system fails loudly instead of guessing" {
+@test "every service wrapper rejects an unknown init system" {
     INIT="weirdinit"
-    run service_tor_start
-    assert_failure
-    assert_output --partial "not supported"
+    local fn
+    for fn in service_tor_start service_tor_stop service_tor_restart \
+              service_tor_running service_tor_reload service_tor_log; do
+        run "$fn"
+        assert_failure
+        assert_output --partial "not supported"
+    done
 }
 
-@test "service_tor_log tails TOR_LOG_FILE on OpenRC instead of using journalctl" {
-    INIT=openrc
-    TOR_LOG_FILE="$TEST_TMP/tor.log"
-    printf 'boot line\nlast line\n' > "$TOR_LOG_FILE"
+@test "service_tor_log tails TOR_LOG_FILE on every non-systemd init" {
+    local init
+    for init in openrc runit sysvinit; do
+        INIT="$init"
+        TOR_LOG_FILE="$TEST_TMP/tor-$init.log"
+        printf 'boot line\nlast line\n' > "$TOR_LOG_FILE"
 
-    run service_tor_log
-    assert_success
-    assert_output --partial "last line"
+        run service_tor_log
+        assert_success
+        assert_output --partial "last line"
+    done
     assert_file_not_contains "$STUB_LOG" 'journalctl'
 }
 
@@ -114,6 +133,24 @@ STUB
     export CT_TEST_RESOLVED_RUNNING=1
     run resolver_running
     assert_failure
+}
+
+@test "resolver helpers are no-ops on non-systemd inits" {
+    INIT=openrc
+
+    run resolver_start
+    assert_success
+
+    run resolver_mask_now systemd-resolved.service
+    assert_success
+
+    run resolver_unmask systemd-resolved.service
+    assert_success
+
+    run resolver_is_active systemd-resolved.service
+    assert_failure
+
+    assert_file_not_contains "$STUB_LOG" 'systemctl'
 }
 
 @test "restore_tor_service stops Tor and removes the block when Tor was not running" {
@@ -179,6 +216,18 @@ EOF
     detect_tor_user
     assert_equal "$TOR_UID" "4242"
     assert_equal "$TOR_USER" "tor"
+}
+
+@test "detect_tor_user leaves no user when no candidate exists" {
+    TOR_UID="" TOR_USER=""
+    make_stub id <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+
+    detect_tor_user || true   # returns 1 when no candidate matches
+    assert_equal "$TOR_UID" ""
+    assert_equal "$TOR_USER" ""
 }
 
 @test "_banner_commit prints STABLE or the short commit" {

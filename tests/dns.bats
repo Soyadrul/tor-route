@@ -84,6 +84,19 @@ setup() { setup_test; }
     assert_output --partial "PASS:"
 }
 
+@test "fix_dns_start refuses symlinked state files without touching resolv.conf" {
+    local var
+    for var in RESOLVED_STATE_FILE RESOLV_BACKUP RESOLVED_MASK_STATE_FILE; do
+        rm -rf "$STATE_DIR"
+        mkdir -p "$STATE_DIR"
+        ln -s /etc/passwd "${!var}"
+
+        run fix_dns_start
+        assert_failure
+        assert_output --partial "State file is a symlink"
+    done
+}
+
 @test "fix_dns_stop guards, restores the backup and unmasks only recorded units (mount namespace)" {
     needs_mountns
     run unshare -rm env TEST_TMP="$TEST_TMP" TOR_ROUTE_UNDER_TEST="$TOR_ROUTE_UNDER_TEST" \

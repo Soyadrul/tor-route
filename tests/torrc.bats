@@ -155,6 +155,16 @@ EOF
     assert_file_not_contains "$TORRC" '^TransPort'
 }
 
+@test "strip handles a torrc whose last line has no trailing newline" {
+    printf 'before\n# --- tor-route.sh start ---\nTransPort 127.0.0.1:9040\n# --- tor-route.sh end ---\nafter-no-newline' > "$TORRC"
+
+    run strip_torrc_block
+    assert_success
+    assert_file_contains "$TORRC" '^before$'
+    assert_file_contains "$TORRC" '^after-no-newline$'
+    assert_file_not_contains "$TORRC" 'tor-route.sh start'
+}
+
 # ── configure_torrc / cleanup_torrc / revert ──────────────────────────────────
 
 @test "configure_torrc writes the marked block, the pin and the country file" {

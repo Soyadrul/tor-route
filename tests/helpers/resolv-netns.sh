@@ -97,6 +97,15 @@ fix-dns-start)
     out=$(fix_dns_start 2>&1) || fail "fix_dns_start failed without a resolver: $out"
     [[ "$(cat "$RESOLVED_STATE_FILE")" == "no" ]] || fail "resolved-state not recorded as no"
 
+    # Non-systemd init: no masking, no mask record; the swap still happens.
+    rm -rf "$STATE_DIR"
+    : > "$STUB_LOG"
+    INIT=openrc
+    out=$(fix_dns_start 2>&1) || fail "fix_dns_start failed on openrc: $out"
+    grep -q 'Masking DNS resolver units' <<<"$out" && fail "masking attempted on non-systemd"
+    [[ ! -e "$RESOLVED_MASK_STATE_FILE" ]] || fail "mask state written on non-systemd"
+    [[ "$(cat /etc/resolv.conf)" == "nameserver 127.0.0.1" ]] || fail "resolv.conf not swapped on openrc"
+
     echo "PASS: fix_dns_start backs up, records and verifies"
     ;;
 
@@ -167,7 +176,101 @@ fix-dns-stop)
     [[ ! -f "$RESOLVED_MASK_STATE_FILE" ]] || fail "mask state file not consumed"
     grep -q 'DNS resolver restored' <<<"$out" || fail "resolver restore message missing"
 
+    # Missing mask record (session from an older script version): every
+    # current unit is unmasked, and a failing unmask is reported as skipped.
+    rm -rf "$STATE_DIR"
+    mkdir -p "$STATE_DIR"
+    printf 'no\n' > "$RESOLVED_STATE_FILE"
+    RESOLVED_UNITS=(unit-x.service unit-y.socket)
+    INIT=systemd
+    make_systemd_stubs
+    : > "$STUB_LOG"
+    export CT_TEST_UNMASK_FAIL=unit-x.service
+    out=$(fix_dns_stop 2>&1) || fail "fix_dns_stop failed on the unmask fallback list: $out"
+    grep -q '^systemctl unmask unit-x.service$' "$STUB_LOG" || fail "unit-x was not unmasked"
+    grep -q '^systemctl unmask unit-y.socket$' "$STUB_LOG" || fail "unit-y was not unmasked"
+    grep -q 'skipped: unit-x.service' <<<"$out" || fail "failing unmask was not reported"
+    unset CT_TEST_UNMASK_FAIL
+
+    # A bind-mounted resolv.conf can neither be symlinked nor rewritten: the
+    # symlink failure falls through and the final fallback write is reported
+    # as failed instead of claiming success (BUGS.md #7).
+    rm -rf "$STATE_DIR"
+    mkdir -p "$STATE_DIR"
+    printf 'yes\n' > "$RESOLVED_STATE_FILE"
+    printf 'nameserver 203.0.113.9\n' > "$TEST_TMP/bound_resolv"
+    mount --bind "$TEST_TMP/bound_resolv" /etc/resolv.conf || fail "could not bind mount resolv.conf"
+    INIT=systemd
+    make_systemd_stubs
+    : > "$STUB_LOG"
+    out=$(fix_dns_stop 2>&1) || fail "fix_dns_stop failed on a bind-mounted resolv.conf: $out"
+    if [[ -f /run/systemd/resolve/stub-resolv.conf ]]; then
+        grep -q 'Could not symlink stub-resolv.conf' <<<"$out" || fail "symlink failure not reported"
+    fi
+    grep -q 'Could not write /etc/resolv.conf at all' <<<"$out" || fail "fallback write failure not reported"
+    [[ "$(cat /etc/resolv.conf)" == "nameserver 203.0.113.9" ]] || fail "bind-mounted file was modified"
+    umount /etc/resolv.conf || fail "could not unmount the test bind mount"
+
+    # A backup restore that fails is reported, then the generic fallback is
+    # written; the failed copy is simulated with a cp override.
+    rm -rf "$STATE_DIR"
+    mkdir -p "$STATE_DIR"
+    printf 'no\n' > "$RESOLVED_STATE_FILE"
+    printf 'nameserver 198.51.100.53\n' > "$RESOLV_BACKUP"
+    write_resolv "nameserver 127.0.0.1"
+    INIT=systemd
+    cp() { return 1; }
+    out=$(fix_dns_stop 2>&1) || fail "fix_dns_stop failed to report a bad backup: $out"
+    unset -f cp
+    grep -q 'Could not restore /etc/resolv.conf from the backup' <<<"$out" || fail "backup failure not reported"
+    [[ "$(cat /etc/resolv.conf)" == "nameserver 1.1.1.1" ]] || fail "generic fallback missing after backup failure"
+
+    # Non-systemd init: no unmasking, resolv.conf restored from the backup.
+    rm -rf "$STATE_DIR"
+    mkdir -p "$STATE_DIR"
+    printf 'no\n' > "$RESOLVED_STATE_FILE"
+    printf 'nameserver 198.51.100.53\n' > "$RESOLV_BACKUP"
+    write_resolv "nameserver 127.0.0.1"
+    INIT=openrc
+    : > "$STUB_LOG"
+    out=$(fix_dns_stop 2>&1) || fail "fix_dns_stop failed on openrc: $out"
+    grep -q 'resolv.conf restored from backup' <<<"$out" || fail "openrc restore message missing"
+    grep -q 'unmask' "$STUB_LOG" && fail "unmask attempted on non-systemd"
+
     echo "PASS: fix_dns_stop guards, restores and unmasks"
+    ;;
+
+check-resolv)
+    # `check` output for every resolv.conf shape (regular file with counted
+    # nameservers, missing file, symlink) plus the recorded pre-start
+    # resolver state. Runs on a private /etc via tmpfs.
+    isolate_etc
+    require_root() { :; }
+    require_init() { :; }
+    detect_tor_user() { TOR_UID=4242; TOR_USER=tor; }
+    service_tor_running() { return 1; }
+    is_routing_active() { return 1; }
+    : > "$TORRC"
+    mkdir -p "$STATE_DIR"
+    printf 'yes\n' > "$RESOLVED_STATE_FILE"
+
+    write_resolv $'nameserver 198.51.100.53\nnameserver 203.0.113.53'
+    out=$(cmd_check 2>&1) || fail "cmd_check failed on a regular resolv.conf: $out"
+    grep -q 'resolv.conf:  regular file (2 lines)' <<<"$out" || fail "regular file not reported"
+    grep -q 'Nameservers:  2 entries' <<<"$out" || fail "nameserver count wrong"
+    grep -q 'Resolved:     was yes' <<<"$out" || fail "resolved-state line missing"
+
+    rm -f /etc/resolv.conf
+    out=$(cmd_check 2>&1) || fail "cmd_check failed without resolv.conf: $out"
+    grep -q 'resolv.conf:  missing' <<<"$out" || fail "missing resolv.conf not reported"
+    grep -q 'Nameservers:  0 entries' <<<"$out" || fail "missing-file nameserver count wrong"
+
+    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+    out=$(cmd_check 2>&1) || fail "cmd_check failed on a symlinked resolv.conf: $out"
+    grep -q 'resolv.conf:  symlink → /run/systemd/resolve/stub-resolv.conf' <<<"$out" \
+        || fail "symlink not reported"
+
+    echo "PASS: check reports resolv.conf type, nameserver count and resolver state"
     ;;
 
 status-resolv)
