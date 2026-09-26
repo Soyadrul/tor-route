@@ -209,7 +209,7 @@ Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — se
 3. Restores DNS, but only if `start` actually modified it (it tracks this via state files): unmasks the DNS resolver units it masked itself — systemd only; units that were already masked before `start` stay masked — and restores `/etc/resolv.conf` — prefers a symlink to systemd-resolved's live `stub-resolv.conf` **only when `systemd-resolved` was running before `start`** and the stub file exists, then falls back to a static backup copy, then to a generic fallback (`nameserver 1.1.1.1`); each step is verified, and a failed symlink falls through to the backup instead of being reported as restored. If the DNS was never modified, it is left untouched.
 4. Only restarts the DNS resolver if it was running before `start` was called — the system is left exactly as it was found.
 5. Restores the Tor service to how it was found: stopped if Tor wasn't running before `start`, restarted with the original configuration (after the torrc block is removed) if it was.
-6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. If the marker structure is malformed — unbalanced, out of order, or nested (e.g. a partial write left a start marker without its end marker) — torrc is backed up (or the backup failure is reported) and the command aborts instead of risking lines outside the block. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
+6. Removes the settings `start` added to `/etc/tor/torrc` — only the script's own marked block is deleted; any `TransPort`/`ExitNodes` etc. lines you had configured beforehand are left untouched. If the marker structure is malformed — unbalanced, out of order, or nested (e.g. a partial write left a start marker without its end marker) — torrc is backed up (or the backup failure is reported) and the command aborts instead of risking lines outside the block. The service state recorded at `start` is kept until this cleanup succeeds, so a retry after fixing `torrc` still restores Tor as it was found. Then verifies direct connectivity with a bounded series of retries, warning you if the DNS resolver is still starting.
 
 ### `status`
 
@@ -227,7 +227,7 @@ Displays a live summary:
 
 ### `newnode [CC]`
 
-Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while **both** the Tor service is running **and** routing is active; it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees and would leave stale `country` state. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process (`service_tor_reload` — `systemctl kill --signal=SIGHUP` / `rc-service reload` / `sv reload`). This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
+Like `start`, serialized by the advisory `flock` on `/run/tor-route/lock` — see [Shared notes](#shared-notes). Detects and displays the init system. Only runs while **both** the Tor service is running **and** routing is active; it refuses otherwise, since a circuit rebuild without the redirect rules cannot change what the outside world sees and would leave stale `country` state. Updates torrc with the new country preference (or clears the pin if no code is given), then sends a `SIGHUP` signal to the Tor process (`service_tor_reload` — `systemctl kill --signal=SIGHUP` / `rc-service reload` / `sv reload` / `/etc/init.d/tor reload`). This tells Tor to reload its configuration and rebuild all of its **circuits**. A circuit is the three-hop path your traffic takes through the Tor network:
 
 ```
 Your machine ──► Guard node ──► Middle node ──► Exit node ──► Internet
@@ -401,7 +401,7 @@ State files live under `$STATE_DIR` (`/run/tor-route`, fallback `/tmp/tor-route`
 - [ ] Auto-start service — command flag to enable Tor routing at boot
 - [ ] `--dry-run` — preview what `start`/`stop` would do without applying
 - [ ] Multi-distro installer — detect distro and install dependencies automatically
-- [ ] BATS tests — basic shell-level regression tests
+- [ ] BATS tests — port the standalone `tests/*-test.sh` regression tests (plain Bash, one per bug, no runner) to BATS
 - [ ] Desktop notifications — alert on IP/country change via `newnode`
 
 ---
