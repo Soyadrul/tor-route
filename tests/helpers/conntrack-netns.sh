@@ -1,53 +1,23 @@
 #!/usr/bin/env bash
-# Regression test for stop's conntrack cleanup (cleanup_conntrack_tor_ports).
-#
-# Reproduces the real scenario in a throwaway network namespace: REDIRECT
-# rules send new TCP/UDP flows to Tor's TransPort/DNSPort, so their conntrack
-# entries carry Tor's local port as the reply SOURCE port. The test asserts
-# that cleanup removes exactly those entries and leaves unrelated flows
-# alone.
-#
-# Requires: unshare, ip, iptables, conntrack, python3. Exits 77 (skip) when a
-# tool is missing or unprivileged user/network namespaces are unavailable.
-#
-# Usage: tests/conntrack-cleanup-test.sh
+# Network-namespace helper for the conntrack cleanup regression (withdrawn
+# BUGS.md #1, kept as a guard). Runs inside `unshare -rn` (caller-enforced)
+# and must use the REAL iptables/conntrack: it reproduces a REDIRECT rewrite
+# and checks that cleanup removes exactly the Tor-port entries, keeps
+# unrelated ones, and prints no raw conntrack dump.
 
 set -u
 
-if [[ "${CT_TEST_IN_NETNS:-0}" != "1" ]]; then
-    for cmd in unshare ip iptables conntrack python3 readlink; do
-        command -v "$cmd" >/dev/null 2>&1 || { echo "SKIP: '$cmd' not available"; exit 77; }
-    done
-    if ! unshare -rn true 2>/dev/null; then
-        echo "SKIP: unprivileged user/network namespaces unavailable"
-        exit 77
-    fi
-    TEST_SELF=$(readlink -f "$0")
-    exec unshare -rn env CT_TEST_IN_NETNS=1 bash "$TEST_SELF" "$@"
-fi
-
-SCRIPT_DIR=$(cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)
-TOR_ROUTE="$SCRIPT_DIR/../tor-route.sh"
-UNRELATED_PORT=8080
+HELPERS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$HELPERS_DIR/setup.bash"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-[[ -f "$TOR_ROUTE" ]] || fail "tor-route.sh not found at $TOR_ROUTE"
+TEST_TMP="${TEST_TMP:-$(mktemp -d)}"
+export TEST_TMP
+init_test_env
 
-TOR_TRANS_PORT=$(grep -m1 '^TOR_TRANS_PORT=' "$TOR_ROUTE" | cut -d= -f2)
-TOR_DNS_PORT=$(grep -m1 '^TOR_DNS_PORT=' "$TOR_ROUTE" | cut -d= -f2)
-[[ "$TOR_TRANS_PORT" =~ ^[0-9]+$ && "$TOR_DNS_PORT" =~ ^[0-9]+$ ]] \
-    || fail "could not read TOR_TRANS_PORT/TOR_DNS_PORT from $TOR_ROUTE"
-
-# Load the function under test (the script's top level is a dispatcher and
-# cannot be sourced directly). Fail loudly if the implementation changes shape.
-if ! sed -n '/^cleanup_conntrack_tor_ports()/,/^}/p' "$TOR_ROUTE" | grep -q .; then
-    fail "cleanup_conntrack_tor_ports() not found in $TOR_ROUTE"
-fi
-# shellcheck disable=SC1090
-source <(sed -n '/^cleanup_conntrack_tor_ports()/,/^}/p' "$TOR_ROUTE")
-declare -F cleanup_conntrack_tor_ports >/dev/null || fail "function failed to load"
-YELLOW=""; RESET=""   # function prints colour codes; colours are optional
+UNRELATED_PORT=8080
 
 # ── Throwaway netns setup ─────────────────────────────────────────────────────
 ip link set lo up
@@ -103,19 +73,20 @@ wait_for_entry tcp "$TOR_TRANS_PORT" || fail "no TCP entry with reply source por
 wait_for_entry udp "$TOR_DNS_PORT"   || fail "no UDP entry with reply source port $TOR_DNS_PORT"
 wait_for_entry tcp "$UNRELATED_PORT" || fail "unrelated TCP entry (port $UNRELATED_PORT) missing"
 
-# cleanup's only intended output is its one-line summary. conntrack -D echoes
-# every deleted flow to stdout, so without an explicit redirect `stop` would
-# dump the raw entries at the user.
+# cleanup's only intended output is its one-line summary: conntrack -D echoes
+# every deleted flow to stdout, so a missing redirect would dump the raw
+# entries at the user during stop.
 cleanup_output=$(cleanup_conntrack_tor_ports 2>&1)
 [[ "$cleanup_output" == *"Removed stale conntrack entries pointing at Tor's ports."* ]] \
     || fail "cleanup summary line missing from output"
-[[ "$cleanup_output" != *"src="* && "$cleanup_output" != *"dst="* ]] \
-    || fail "cleanup leaked raw conntrack entries to its output"
+case "$cleanup_output" in
+    *"src="*|*"dst="*) fail "cleanup leaked raw conntrack entries to its output" ;;
+esac
 
 [[ -z "$(reply_entries tcp "$TOR_TRANS_PORT")" ]] || fail "Tor TCP entry survived cleanup"
 [[ -z "$(reply_entries udp "$TOR_DNS_PORT")" ]]   || fail "Tor UDP entry survived cleanup"
 [[ -n "$(reply_entries tcp "$UNRELATED_PORT")" ]] || fail "cleanup deleted an unrelated TCP entry (too broad)"
 
 kill "$routed_pid" "$unrelated_pid" "$listener_pid" 2>/dev/null
-echo "PASS: conntrack cleanup removed Tor-port entries, kept unrelated ones"
+echo "PASS: conntrack cleanup removed Tor-port entries, kept unrelated ones and stayed quiet"
 exit 0
