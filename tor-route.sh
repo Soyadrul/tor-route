@@ -735,12 +735,12 @@ revert_torrc_to_previous() {
 # Put the Tor service back the way `start` found it. If Tor was already
 # running before (recorded in TOR_STATE_FILE), clean torrc first and restart
 # the service so it comes back on the user's own configuration; if it was
-# not running, just stop it. Consumes the state file either way; a missing
-# file defaults to "not running", i.e. the old stop-always behaviour.
+# not running, just stop it. The state file is consumed after the cleanup
+# and the service restore steps have run; a missing file defaults to "not
+# running", i.e. the old stop-always behaviour.
 restore_tor_service() {
     local was_running
     was_running=$(cat "$TOR_STATE_FILE" 2>/dev/null)
-    rm -f "$TOR_STATE_FILE"
     if [[ "$was_running" == "yes" ]]; then
         echo -e "${YELLOW}[i] Tor was running before - restoring it with the original config...${RESET}"
         cleanup_torrc
@@ -751,6 +751,11 @@ restore_tor_service() {
         cleanup_torrc
         echo -e "${GREEN}${BOLD}[✓] Tor stopped.${RESET}"
     fi
+    # Consumed only after cleanup_torrc returned: it aborts (exit 1) on a
+    # malformed torrc and the user is told to fix it and retry. Keeping the
+    # state file until then lets that retry restore the pre-session Tor state
+    # instead of defaulting to "was not running".
+    rm -f "$TOR_STATE_FILE"
 }
 
 # Fired when the Tor redirect rules are still live but the firewall backups
