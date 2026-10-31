@@ -418,6 +418,45 @@ validate_country() {
     return 1
 }
 
+# Print the local addresses our Tor user is listening on, space-separated, or
+# '(none)'. $1: ss family flag ("t" for TCP, "u" for UDP). Attribution is by
+# UID, not process name: a bare `grep -w tor` would also pick up sockets of
+# other binaries named "tor" (e.g. Tor Browser's bundled tor), making foreign
+# ports look like ours. '(none)' only when the Tor user is known and owns no
+# listening socket; '(none — owner unverified)' when TOR_UID is unknown, ss
+# fails, or a socket owner cannot be read, so "none" is not confused with
+# "unknown" in a report pasted from `check`.
+tor_listen_ports() {
+    local family="$1" line pid uid ss_out ports="" unverified=0
+    if [[ -z "$TOR_UID" ]]; then
+        printf '(none — owner unverified)'
+        return 0
+    fi
+    ss_out=$(ss "-${family}lnp" 2>/dev/null) || {
+        printf '(none — owner unverified)'
+        return 0
+    }
+    while IFS= read -r line; do
+        for pid in $(grep -oE 'pid=[0-9]+' <<<"$line" | cut -d= -f2); do
+            uid=$(stat -c %u "/proc/$pid" 2>/dev/null) || {
+                unverified=1
+                continue
+            }
+            if [[ "$uid" == "$TOR_UID" ]]; then
+                ports+="$(awk '{print $4}' <<<"$line") "
+                break
+            fi
+        done
+    done <<<"$ss_out"
+    if [[ -n "$ports" ]]; then
+        printf '%s' "$ports"
+    elif (( unverified )); then
+        printf '(none — owner unverified)'
+    else
+        printf '(none)'
+    fi
+}
+
 cmd_check() {
     banner
     require_root check
@@ -472,8 +511,8 @@ cmd_check() {
     else
         echo -e "  Status:    ${YELLOW}Not running${RESET}"
     fi
-    echo -e "  Ports:     $(ss -tlnp 2>/dev/null | grep -w tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
-    echo -e "  DNS port:  $(ss -ulnp 2>/dev/null | grep -w tor | awk '{print $4}' | tr '\n' ' ' || echo '(none)')"
+    echo -e "  Ports:     $(tor_listen_ports t)"
+    echo -e "  DNS port:  $(tor_listen_ports u)"
 
     # ── Torrc ───────────────────────────────────────────────────────────────
     echo -e "\n  ${BOLD}── torrc ───────────────────────────────${RESET}"

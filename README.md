@@ -243,7 +243,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **System** — script version, OS release, kernel, detected init system
 - **Dependencies** — each binary found with its version string
 - **Tor user** — which system usernames were tried, which one matched
-- **Tor service** — running/stopped, listening TCP and DNS ports
+- **Tor service** — running/stopped, listening TCP and DNS ports (attributed to the detected Tor user's UID, so other processes named `tor` are not listed; `(none)` when the known Tor user owns no listening port, `(none — owner unverified)` when the Tor user is unknown, `ss` fails, or a socket owner cannot be read)
 - **torrc** — path, permissions, and whether the script's config block is present
 - **State files** — which of the 8 state/lock files exist (firewall, DNS, country, service, mask state and lock) in `/run/tor-route` (fallback `/tmp/tor-route`)
 - **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy

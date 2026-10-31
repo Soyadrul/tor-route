@@ -107,6 +107,11 @@ STUB
     assert_output --partial "── System ─"
     assert_output --partial "── Firewall ─"
     assert_output --partial "All checks passed"
+    # A known Tor user with no sockets must render '(none)', not a blank line
+    # (the old pipeline's `|| echo` never fired) and not 'unverified'.
+    assert_output --partial "Ports:     (none)"
+    assert_output --partial "DNS port:  (none)"
+    refute_output --partial "owner unverified"
 }
 
 @test "check reports failures when a dependency is missing" {
@@ -281,6 +286,141 @@ EOF
     run cmd_check
     assert_success
     assert_output --partial "not found - not required"
+}
+
+@test "check scopes its port list to our Tor user (foreign 'tor' processes excluded)" {
+    allow_command_guards
+    make_check_stubs
+    make_id_stub
+    # ss reports listeners all owned by a process named "tor": ours (UID 4242,
+    # matching make_id_stub) on TCP 9040 (IPv4 and IPv6) and UDP 9053, plus a
+    # foreign tor binary (e.g. Tor Browser's bundled tor) on TCP 9151 and UDP
+    # 9153.
+    make_stub ss <<'STUB'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
+case "$*" in
+    *-tlnp*)
+        echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"tor\",pid=111,fd=6))"
+        echo "LISTEN 0 4096 [::1]:9040 [::]:* users:((\"tor\",pid=111,fd=9))"
+        echo "LISTEN 0 4096 127.0.0.1:9151 0.0.0.0:* users:((\"tor\",pid=222,fd=7))"
+        ;;
+    *-ulnp*)
+        echo "UNCONN 0 0 127.0.0.1:9053 0.0.0.0:* users:((\"tor\",pid=111,fd=8))"
+        echo "UNCONN 0 0 127.0.0.1:9153 0.0.0.0:* users:((\"tor\",pid=222,fd=10))"
+        ;;
+esac
+exit 0
+STUB
+    make_stub stat <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *"/proc/111") echo "4242" ;;   # our tor user (matches make_id_stub)
+    *"/proc/222") echo "9999" ;;   # foreign process
+    *) exec /usr/bin/stat "$@" ;;
+esac
+exit 0
+STUB
+
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     127.0.0.1:9040 [::1]:9040"
+    refute_output --partial "9151"
+    assert_output --partial "DNS port:  127.0.0.1:9053"
+    refute_output --partial "9153"
+}
+
+@test "check marks ports as unverified when the Tor user is unknown" {
+    allow_command_guards
+    make_check_stubs
+    detect_tor_user() { TOR_UID=""; TOR_USER=""; }
+    TOR_UID="" TOR_USER=""
+    # Without a known Tor user no socket ownership can be verified, so the
+    # lines must not claim there is simply no port.
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     (none — owner unverified)"
+    assert_output --partial "DNS port:  (none — owner unverified)"
+}
+
+@test "check marks ports as unverified when a socket owner cannot be read" {
+    allow_command_guards
+    make_check_stubs
+    make_id_stub
+    make_stub ss <<'STUB'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
+case "$*" in
+    *-tlnp*) echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"tor\",pid=111,fd=6))" ;;
+esac
+exit 0
+STUB
+    # /proc/111 is unreadable, so ownership cannot be confirmed either way;
+    # the line must not claim there is simply no port.
+    make_stub stat <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     (none — owner unverified)"
+    # UDP is a separate query: with no UDP sockets it is '(none)', not carried
+    # over from the TCP result.
+    assert_output --partial "DNS port:  (none)"
+    refute_output --partial "DNS port:  (none — owner unverified)"
+}
+
+@test "check marks ports as unverified when ss fails" {
+    allow_command_guards
+    make_check_stubs
+    make_id_stub
+    # ss answers --version (the dependency probe) but fails the port query, so
+    # ownership was never checked and the line must not claim '(none)'.
+    make_stub ss <<'STUB'
+#!/usr/bin/env bash
+if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
+exit 1
+STUB
+
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     (none — owner unverified)"
+    assert_output --partial "DNS port:  (none — owner unverified)"
+}
+
+@test "check attributes a multi-pid socket by UID even when the process name differs" {
+    allow_command_guards
+    make_check_stubs
+    make_id_stub
+    # Multi-process socket: the first pid is foreign, the second is ours and
+    # its binary is renamed (comm is not exactly "tor", so a name match misses
+    # it) — only UID attribution finds it.
+    make_stub ss <<'STUB'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
+case "$*" in
+    *-tlnp*) echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"other\",pid=222,fd=6),(\"tordaemon\",pid=111,fd=7))" ;;
+esac
+exit 0
+STUB
+    make_stub stat <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *"/proc/111") echo "4242" ;;   # our tor user (matches make_id_stub)
+    *"/proc/222") echo "9999" ;;   # foreign process
+    *) exec /usr/bin/stat "$@" ;;
+esac
+exit 0
+STUB
+
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     127.0.0.1:9040"
+    refute_output --partial "owner unverified"
 }
 
 # ── status: remaining branches ────────────────────────────────────────────────

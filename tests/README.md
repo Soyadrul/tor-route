@@ -90,7 +90,7 @@ Additional options:
 | [`resolv-conf-replace.bats`](#resolv-conf-replacebats) | 1 | replacement helpers against bind mounts (mount ns) |
 | [`service.bats`](#servicebats) | 15 | init-system service dispatch and `restore_tor_service` |
 | [`state-and-lock.bats`](#state-and-lockbats) | 9 | state directory permissions/symlink guards and advisory lock |
-| [`status-check.bats`](#status-checkbats) | 18 | `status`/`check` output and dependency gates |
+| [`status-check.bats`](#status-checkbats) | 23 | `status`/`check` output and dependency gates |
 | [`torrc.bats`](#torrcbats) | 16 | torrc marker handling, `configure_torrc`, cleanup/revert |
 
 Counts are a snapshot — `bats --count tests/` prints the current numbers.
@@ -289,6 +289,13 @@ over a bind-mounted file must fail (EBUSY) and leave no `.tmp` file behind.
   torrc and/or Tor user missing, a state file showing `(exists)`, the
   routing-active NAT/filter dump, the three IPv6 policy outcomes, and
   `TOR_LOG_FILE` tailing on non-systemd inits (non-empty, empty, missing).
+- `check` port lines are scoped to the Tor user's UID: a foreign process
+  named `tor` (e.g. Tor Browser's bundled tor) is excluded from `Ports:`/
+  `DNS port:`, a multi-pid socket is attributed when any of its owners
+  matches, and only a known Tor user with no matching socket renders
+  `(none)`. An unknown Tor user, an `ss` failure, or an unreadable socket
+  owner renders `(none — owner unverified)`, so "none" is never confused
+  with "unknown".
 - Mount namespace: `check` reports `resolv.conf` as regular file (with its
   nameserver count), missing or symlink, plus the recorded pre-start resolver
   state.
