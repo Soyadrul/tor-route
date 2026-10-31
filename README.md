@@ -35,6 +35,7 @@ Route all of your machine's TCP and DNS traffic through Tor with a single comman
      4.  [Tor is not a VPN](#tor-is-not-a-vpn)
      5.  [Exit node country pinning](#exit-node-country-pinning)
      6.  [Exit node blocking](#exit-node-blocking)
+     7.  [Other Tor clients](#other-tor-clients)
 7.  [Verifying you are connected through Tor](#verifying-you-are-connected-through-tor)
 8.  [Troubleshooting](#troubleshooting)
 9.  [File locations](#file-locations)
@@ -292,6 +293,12 @@ When a country code is specified, Tor uses `StrictNodes 1`, which means it will 
 ### Exit node blocking
 
 Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or block known Tor exit nodes. This is expected behaviour — use `newnode` to try a different exit node, or use [Tor bridges](https://bridges.torproject.org/) for more persistent access.
+
+### Other Tor clients
+
+While routing is active, another Tor client cannot reach the Tor network — most notably [Tor Browser](https://www.torproject.org/download/), which bundles its own `tor`. The script redirects *all* new outbound TCP to the system Tor's transparent proxy (`TransPort 9040`), so a second client's bootstrap traffic (directory data fetched over ORPorts, and relay connections) is fed back into the system Tor, which refuses it as Tor-over-Tor (re-entry). The client itself still starts and its local SOCKS/ControlPort remain reachable because loopback is exempt, but it stalls during bootstrap without an obvious error.
+
+The exception is a client configured with bridges: bridge addresses are not in the public Tor consensus, so the re-entry check does not recognise them and the second client bootstraps through the system Tor (Tor-over-Tor). That wastes bandwidth and adds no anonymity — don't do it. Run `stop` before using another Tor client; they cannot share one connection to the network.
 
 ---
 
