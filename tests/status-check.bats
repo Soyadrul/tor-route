@@ -292,33 +292,23 @@ EOF
     allow_command_guards
     make_check_stubs
     make_id_stub
-    # ss reports listeners all owned by a process named "tor": ours (UID 4242,
-    # matching make_id_stub) on TCP 9040 (IPv4 and IPv6) and UDP 9053, plus a
-    # foreign tor binary (e.g. Tor Browser's bundled tor) on TCP 9151 and UDP
-    # 9153.
+    # ss reports listeners all named "tor": ours (kernel UID 4242, matching
+    # make_id_stub) on TCP 9040 (IPv4 and IPv6) and UDP 9053, plus a foreign
+    # tor binary (e.g. Tor Browser's bundled tor) on TCP 9151 and UDP 9153.
     make_stub ss <<'STUB'
 #!/usr/bin/env bash
 printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
 if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
 case "$*" in
     *-tlnp*)
-        echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"tor\",pid=111,fd=6))"
-        echo "LISTEN 0 4096 [::1]:9040 [::]:* users:((\"tor\",pid=111,fd=9))"
-        echo "LISTEN 0 4096 127.0.0.1:9151 0.0.0.0:* users:((\"tor\",pid=222,fd=7))"
+        echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"tor\",pid=111,fd=6)) uid:4242 ino:11 sk:1"
+        echo "LISTEN 0 4096 [::1]:9040 [::]:* users:((\"tor\",pid=111,fd=9)) uid:4242 ino:12 sk:2"
+        echo "LISTEN 0 4096 127.0.0.1:9151 0.0.0.0:* users:((\"tor\",pid=222,fd=7)) uid:9999 ino:13 sk:3"
         ;;
     *-ulnp*)
-        echo "UNCONN 0 0 127.0.0.1:9053 0.0.0.0:* users:((\"tor\",pid=111,fd=8))"
-        echo "UNCONN 0 0 127.0.0.1:9153 0.0.0.0:* users:((\"tor\",pid=222,fd=10))"
+        echo "UNCONN 0 0 127.0.0.1:9053 0.0.0.0:* users:((\"tor\",pid=111,fd=8)) uid:4242 ino:14 sk:4"
+        echo "UNCONN 0 0 127.0.0.1:9153 0.0.0.0:* users:((\"tor\",pid=222,fd=10)) uid:9999 ino:15 sk:5"
         ;;
-esac
-exit 0
-STUB
-    make_stub stat <<'STUB'
-#!/usr/bin/env bash
-case "$*" in
-    *"/proc/111") echo "4242" ;;   # our tor user (matches make_id_stub)
-    *"/proc/222") echo "9999" ;;   # foreign process
-    *) exec /usr/bin/stat "$@" ;;
 esac
 exit 0
 STUB
@@ -357,13 +347,9 @@ case "$*" in
 esac
 exit 0
 STUB
-    # /proc/111 is unreadable, so ownership cannot be confirmed either way;
-    # the line must not claim there is simply no port.
-    make_stub stat <<'STUB'
-#!/usr/bin/env bash
-exit 1
-STUB
-
+    # The socket owner is not reported (e.g. an unprivileged ss), so ownership
+    # cannot be confirmed either way; the line must not claim there is simply
+    # no port.
     run cmd_check
     assert_success
     assert_output --partial "Ports:     (none — owner unverified)"
@@ -391,28 +377,18 @@ STUB
     assert_output --partial "DNS port:  (none — owner unverified)"
 }
 
-@test "check attributes a multi-pid socket by UID even when the process name differs" {
+@test "check attributes a socket by kernel UID even when the process name differs" {
     allow_command_guards
     make_check_stubs
     make_id_stub
-    # Multi-process socket: the first pid is foreign, the second is ours and
-    # its binary is renamed (comm is not exactly "tor", so a name match misses
-    # it) — only UID attribution finds it.
+    # The binary is renamed (comm is not exactly "tor", so a name match would
+    # miss it), but the kernel reports the socket owner as our UID.
     make_stub ss <<'STUB'
 #!/usr/bin/env bash
 printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
 if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
 case "$*" in
-    *-tlnp*) echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"other\",pid=222,fd=6),(\"tordaemon\",pid=111,fd=7))" ;;
-esac
-exit 0
-STUB
-    make_stub stat <<'STUB'
-#!/usr/bin/env bash
-case "$*" in
-    *"/proc/111") echo "4242" ;;   # our tor user (matches make_id_stub)
-    *"/proc/222") echo "9999" ;;   # foreign process
-    *) exec /usr/bin/stat "$@" ;;
+    *-tlnp*) echo "LISTEN 0 4096 127.0.0.1:9040 0.0.0.0:* users:((\"other\",pid=222,fd=6),(\"tordaemon\",pid=111,fd=7)) uid:4242 ino:11 sk:1" ;;
 esac
 exit 0
 STUB
@@ -420,6 +396,40 @@ STUB
     run cmd_check
     assert_success
     assert_output --partial "Ports:     127.0.0.1:9040"
+    refute_output --partial "owner unverified"
+}
+
+@test "check ignores process-name text when attributing a socket by UID" {
+    allow_command_guards
+    make_check_stubs
+    make_id_stub
+    # A local process can set its comm to arbitrary text. Attribution must
+    # use the kernel's trailing uid: field, never a pid= or uid: lookalike
+    # inside the user-controlled process name.
+    make_stub ss <<'STUB'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+if [[ "$1" == "--version" ]]; then echo "ss version 1.0"; exit 0; fi
+case "$*" in
+    *-tlnp*) echo "LISTEN 0 4096 127.0.0.1:9151 0.0.0.0:* users:((\"pid=111 uid:4242\",pid=222,fd=7)) uid:9999 ino:1 sk:1" ;;
+esac
+exit 0
+STUB
+    # The old pid-parsing code believed the name: /proc/111 looked like our
+    # Tor user and the foreign 9151 listener was listed as ours.
+    make_stub stat <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+    *"/proc/111") echo "4242" ;;
+    *"/proc/222") echo "9999" ;;
+    *) exec /usr/bin/stat "$@" ;;
+esac
+STUB
+
+    run cmd_check
+    assert_success
+    assert_output --partial "Ports:     (none)"
+    refute_output --partial "9151"
     refute_output --partial "owner unverified"
 }
 

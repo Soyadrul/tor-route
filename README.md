@@ -244,7 +244,7 @@ Runs a comprehensive, read-only system diagnostic without modifying anything. Th
 - **System** — script version, OS release, kernel, detected init system
 - **Dependencies** — each binary found with its version string
 - **Tor user** — which system usernames were tried, which one matched
-- **Tor service** — running/stopped, listening TCP and DNS ports (attributed to the detected Tor user's UID, so other processes named `tor` are not listed; `(none)` when the known Tor user owns no listening port, `(none — owner unverified)` when the Tor user is unknown, `ss` fails, or a socket owner cannot be read)
+- **Tor service** — running/stopped, listening TCP and DNS ports (attributed to the detected Tor user's UID as reported by the kernel, so other processes named `tor` are not listed and process names cannot spoof ownership; `(none)` when the known Tor user owns no listening port, `(none — owner unverified)` when the Tor user is unknown, `ss` fails, or no port can be verified because no socket owner was reported)
 - **torrc** — path, permissions, and whether the script's config block is present
 - **State files** — which of the 8 state/lock files exist (firewall, DNS, country, service, mask state and lock) in `/run/tor-route` (fallback `/tmp/tor-route`)
 - **Firewall** — iptables/ip6tables version, NAT rules if Tor routing is active, IPv6 policy
@@ -296,7 +296,7 @@ Many websites and services (Cloudflare, Google, etc.) detect and rate-limit or b
 
 ### Other Tor clients
 
-While routing is active, another Tor client cannot reach the Tor network — most notably [Tor Browser](https://www.torproject.org/download/), which bundles its own `tor`. The script redirects *all* new outbound TCP to the system Tor's transparent proxy (`TransPort 9040`), so a second client's bootstrap traffic (directory data fetched over ORPorts, and relay connections) is fed back into the system Tor, which refuses it as Tor-over-Tor (re-entry). The client itself still starts and its local SOCKS/ControlPort remain reachable because loopback is exempt, but it stalls during bootstrap without an obvious error.
+While routing is active, another Tor client cannot reach the Tor network over new connections — most notably [Tor Browser](https://www.torproject.org/download/), which bundles its own `tor`. The script redirects *all* new outbound TCP to the system Tor's transparent proxy (`TransPort 9040`), so a second client's bootstrap traffic (directory data fetched over ORPorts, and relay connections) is fed back into the system Tor, which refuses it as Tor-over-Tor (re-entry). Connections the client opened before `start` can linger (see [Existing connections](#existing-connections)), but it cannot bootstrap or build new circuits. Tor Browser itself still starts and its local SOCKS/ControlPort remain reachable because loopback is exempt, but it stalls during bootstrap without an obvious error; a plain second `tor` may instead fail to start because the system instance already owns the default `SocksPort 9050`/`ControlPort 9051`.
 
 The exception is a client configured with bridges: bridge addresses are not in the public Tor consensus, so the re-entry check does not recognise them and the second client bootstraps through the system Tor (Tor-over-Tor). That wastes bandwidth and adds no anonymity — don't do it. Run `stop` before using another Tor client; they cannot share one connection to the network.
 

@@ -419,34 +419,37 @@ validate_country() {
 }
 
 # Print the local addresses our Tor user is listening on, space-separated, or
-# '(none)'. $1: ss family flag ("t" for TCP, "u" for UDP). Attribution is by
-# UID, not process name: a bare `grep -w tor` would also pick up sockets of
-# other binaries named "tor" (e.g. Tor Browser's bundled tor), making foreign
-# ports look like ours. '(none)' only when the Tor user is known and owns no
-# listening socket; '(none — owner unverified)' when TOR_UID is unknown, ss
-# fails, or a socket owner cannot be read, so "none" is not confused with
-# "unknown" in a report pasted from `check`.
+# '(none)'. $1: ss family flag ("t" for TCP, "u" for UDP). Attribution uses
+# the kernel-reported socket owner (`ss -e`'s uid:<n>), not process names: a
+# bare `grep -w tor` would also pick up sockets of other binaries named "tor"
+# (e.g. Tor Browser's bundled tor), and a process can put arbitrary text such
+# as "pid=<n>" or "uid:<n>" in its name. '(none)' only when the Tor user is
+# known and owns no listening socket; '(none — owner unverified)' when the
+# Tor user is unknown, ss fails, or no socket can be verified because no
+# owner was reported, so "none" is not confused with "unknown" in a report
+# pasted from `check`.
 tor_listen_ports() {
-    local family="$1" line pid uid ss_out ports="" unverified=0
+    local family="$1" line uid ss_out ports="" unverified=0
     if [[ -z "$TOR_UID" ]]; then
         printf '(none — owner unverified)'
         return 0
     fi
-    ss_out=$(ss "-${family}lnp" 2>/dev/null) || {
+    ss_out=$(ss "-${family}lnpe" 2>/dev/null) || {
         printf '(none — owner unverified)'
         return 0
     }
     while IFS= read -r line; do
-        for pid in $(grep -oE 'pid=[0-9]+' <<<"$line" | cut -d= -f2); do
-            uid=$(stat -c %u "/proc/$pid" 2>/dev/null) || {
-                unverified=1
-                continue
-            }
-            if [[ "$uid" == "$TOR_UID" ]]; then
-                ports+="$(awk '{print $4}' <<<"$line") "
-                break
-            fi
-        done
+        [[ -n "$line" ]] || continue
+        # Process names are user-controlled and printed before the socket
+        # fields, so take the last uid: on the line (the kernel's value).
+        uid=$(grep -oE 'uid:[0-9]+' <<<"$line" | tail -n 1 | cut -d: -f2)
+        if [[ -z "$uid" ]]; then
+            unverified=1
+            continue
+        fi
+        if [[ "$uid" == "$TOR_UID" ]]; then
+            ports+="$(awk '{print $4}' <<<"$line") "
+        fi
     done <<<"$ss_out"
     if [[ -n "$ports" ]]; then
         printf '%s' "$ports"

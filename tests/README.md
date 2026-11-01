@@ -59,7 +59,7 @@ sudo pacman -S util-linux iproute2 iptables conntrack-tools python3
 Run everything as your normal user (not root):
 
 ```bash
-bats tests/                      # full suite (165 tests at the time of writing)
+bats tests/                      # full suite (171 tests at the time of writing)
 bats tests/iptables.bats         # a single file
 bats -f 'apply_iptables' tests/  # tests whose name matches a regex
 bats --count tests/              # only print how many tests would run
@@ -90,7 +90,7 @@ Additional options:
 | [`resolv-conf-replace.bats`](#resolv-conf-replacebats) | 1 | replacement helpers against bind mounts (mount ns) |
 | [`service.bats`](#servicebats) | 15 | init-system service dispatch and `restore_tor_service` |
 | [`state-and-lock.bats`](#state-and-lockbats) | 9 | state directory permissions/symlink guards and advisory lock |
-| [`status-check.bats`](#status-checkbats) | 23 | `status`/`check` output and dependency gates |
+| [`status-check.bats`](#status-checkbats) | 24 | `status`/`check` output and dependency gates |
 | [`torrc.bats`](#torrcbats) | 16 | torrc marker handling, `configure_torrc`, cleanup/revert |
 
 Counts are a snapshot — `bats --count tests/` prints the current numbers.
@@ -289,13 +289,15 @@ over a bind-mounted file must fail (EBUSY) and leave no `.tmp` file behind.
   torrc and/or Tor user missing, a state file showing `(exists)`, the
   routing-active NAT/filter dump, the three IPv6 policy outcomes, and
   `TOR_LOG_FILE` tailing on non-systemd inits (non-empty, empty, missing).
-- `check` port lines are scoped to the Tor user's UID: a foreign process
-  named `tor` (e.g. Tor Browser's bundled tor) is excluded from `Ports:`/
-  `DNS port:`, a multi-pid socket is attributed when any of its owners
-  matches, and only a known Tor user with no matching socket renders
-  `(none)`. An unknown Tor user, an `ss` failure, or an unreadable socket
-  owner renders `(none — owner unverified)`, so "none" is never confused
-  with "unknown".
+- `check` port lines are scoped to the Tor user's UID as reported by the
+  kernel (`ss -e`'s trailing `uid:` field), not by process name: a foreign
+  process named `tor` (e.g. Tor Browser's bundled tor) is excluded from
+  `Ports:`/`DNS port:`, a renamed Tor-UID process is still included, and
+  `pid=`/`uid:` text inside a process name cannot spoof attribution. Only a
+  known Tor user with no matching socket renders `(none)`. When the Tor
+  user is unknown, `ss` fails, or no port can be verified because no socket
+  owner was reported, the line renders `(none — owner unverified)`, so
+  "none" is never confused with "unknown".
 - Mount namespace: `check` reports `resolv.conf` as regular file (with its
   nameserver count), missing or symlink, plus the recorded pre-start resolver
   state.
